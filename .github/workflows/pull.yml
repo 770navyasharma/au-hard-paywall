@@ -1,0 +1,44 @@
+name: Daily Pinot Pull
+
+on:
+  schedule:
+    # 20:30 UTC = 02:00 IST (next day). Pulls yesterday-IST by default.
+    - cron: '30 20 * * *'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'Single date YYYY-MM-DD (optional, default = yesterday IST)'
+        required: false
+      end_date:
+        description: 'End date for backfill YYYY-MM-DD (optional, inclusive)'
+        required: false
+
+jobs:
+  pull:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+          cache-dependency-path: puller/requirements.txt
+
+      - name: Install deps
+        run: pip install -r puller/requirements.txt
+
+      - name: Run puller
+        env:
+          PINOT_HOST:        ${{ secrets.PINOT_HOST }}
+          PINOT_USER:        ${{ secrets.PINOT_USER }}
+          PINOT_PASSWORD:    ${{ secrets.PINOT_PASSWORD }}
+          SHEET_ID:          ${{ secrets.SHEET_ID }}
+          GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
+          HOME_FEED_ID:      "1838"
+          POSITIONS:         "5,13,21,27,28"
+        run: |
+          python puller/hard_paywall_puller.py ${{ github.event.inputs.date }} ${{ github.event.inputs.end_date }}
