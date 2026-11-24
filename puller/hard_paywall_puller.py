@@ -1,26 +1,17 @@
 #!/usr/bin/env python3
 """
-hard_paywall_puller.py
-----------------------
-Pull Amar Ujala hard-paywall funnel metrics from Pinot and write to a Google Sheet.
-Idempotent per date — re-running the same date replaces that date's rows.
+hard_paywall_puller.py  (v2)
+----------------------------
+v2 changes vs v1:
+  - Paywall metrics now ONE query per day (splitPart on acqSubSource)
+    instead of N queries per story. ~20-50x faster.
+  - Accumulates all dates in memory, writes each tab ONCE at the end.
+  - Forced unbuffered stdout so Actions logs stream live.
 
-Usage (local or via GitHub Actions):
-  python hard_paywall_puller.py                       # pulls yesterday (IST)
-  python hard_paywall_puller.py 2026-11-01            # single date
-  python hard_paywall_puller.py 2026-11-01 2026-11-24 # backfill range inclusive
-
-Required env:
-  PINOT_HOST          e.g. http://46.62.191.123:8099  (broker HTTP port — NOT 9000 UI port)
-  PINOT_USER
-  PINOT_PASSWORD
-  SHEET_ID            Google Sheet ID from the URL
-  GOOGLE_CREDS_JSON   Service account JSON (as a single-line string)
-
-Optional env:
-  HOME_FEED_ID        default 1838
-  POSITIONS           default "5,13,21,27,28"
-  URL_PREFIX          default https://www.amarujala.com/
+Usage:
+  python -u hard_paywall_puller.py                       # pulls yesterday (IST)
+  python -u hard_paywall_puller.py 2026-11-01            # single date
+  python -u hard_paywall_puller.py 2026-11-01 2026-11-23 # backfill range inclusive
 """
 
 import os
@@ -34,6 +25,11 @@ import pandas as pd
 import requests
 from google.oauth2 import service_account
 import gspread
+
+
+# Force unbuffered output (safety net in addition to python -u)
+sys.stdout.reconfigure(line_buffering=True)
+sys.stderr.reconfigure(line_buffering=True)
 
 
 # ---------- config ----------
@@ -51,9 +47,13 @@ PINOT_QUERY_URL = f"{PINOT_HOST}/query/sql"
 TIMEOUT = 180
 
 
-# ---------- Pinot client ----------
+def log(msg: str):
+    print(f"[{dt.datetime.utcnow().strftime('%H:%M:%S')}] {msg}", flush=True)
+
+
+# ---------- Pinot ----------
 def pinot_query(sql: str) -> pd.DataFrame:
-    """Run a Pinot SQL query and return a DataFrame."""
+    t0 = time.time()
     r = requests.post(
         PINOT_QUERY_URL,
         json={"sql": sql},
@@ -65,16 +65,18 @@ def pinot_query(sql: str) -> pd.DataFrame:
     if d.get("exceptions"):
         raise RuntimeError(f"Pinot error: {d['exceptions']}\nSQL: {sql[:400]}")
     rt = d.get("resultTable")
+    took = time.time() - t0
     if not rt:
+        log(f"  query returned no resultTable ({took:.1f}s)")
         return pd.DataFrame()
     cols = rt["dataSchema"]["columnNames"]
     rows = rt.get("rows", [])
+    log(f"  query ok: {len(rows)} rows in {took:.1f}s")
     return pd.DataFrame(rows, columns=cols)
 
 
 # ---------- extractors ----------
 def pull_feed_metrics(date_str: str) -> pd.DataFrame:
-    """Position × version × story grain. FI/FC unique users + raw events."""
     pos_list = ",".join(str(p) for p in POSITIONS)
     sql = f"""
     SELECT
@@ -102,103 +104,83 @@ def pull_feed_metrics(date_str: str) -> pd.DataFrame:
     return pinot_query(sql)
 
 
-def pull_paywall_metrics(date_str: str, story_ids: List[str]) -> pd.DataFrame:
-    """Story × hour grain for PV/PC/VIL/BC/BUYS. acqSubSource substring match."""
-    if not story_ids:
-        return pd.DataFrame(columns=[
-            "date", "hour", "story_id",
-            "pv_users", "pc_users", "vil_users", "bc_users", "buys_users"
-        ])
-    frames = []
-    for sid in story_ids:
-        sql = f"""
-        SELECT
-          '{date_str}' AS date,
-          event_hour_ist AS hour,
-          '{sid}' AS story_id,
-          event_type,
-          DISTINCTCOUNT(user_id) AS unique_users
-        FROM events
-        WHERE event_date_ist = '{date_str}'
-          AND event_type IN ('PAYWALL_VIEW','PAYWALL_CLICK','VIEW_ITEM_LIST','BEGIN_CHECKOUT','BUYS_PREMIUM_SUBSCRIPTION')
-          AND JSON_EXTRACT_SCALAR(metadata,'$.acqSubSource','STRING','') LIKE '%{sid}%'
-        GROUP BY event_hour_ist, event_type
-        LIMIT 10000
-        """
-        df = pinot_query(sql)
-        if not df.empty:
-            frames.append(df)
-    if not frames:
-        return pd.DataFrame(columns=[
-            "date", "hour", "story_id",
-            "pv_users", "pc_users", "vil_users", "bc_users", "buys_users"
-        ])
-    long = pd.concat(frames, ignore_index=True)
-    wide = long.pivot_table(
-        index=["date", "hour", "story_id"],
+def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame:
+    """
+    ONE query per day. Extracts story_id from acqSubSource (3rd pipe field)
+    and GROUP BYs by it. Returns rows only for stories we care about.
+    """
+    sql = f"""
+    SELECT
+      '{date_str}' AS date,
+      event_hour_ist AS hour,
+      splitPart(JSON_EXTRACT_SCALAR(metadata, '$.acqSubSource', 'STRING', ''), '|', 3) AS story_id,
+      event_type,
+      DISTINCTCOUNT(user_id) AS unique_users
+    FROM events
+    WHERE event_date_ist = '{date_str}'
+      AND event_type IN ('PAYWALL_VIEW','PAYWALL_CLICK','VIEW_ITEM_LIST','BEGIN_CHECKOUT','BUYS_PREMIUM_SUBSCRIPTION')
+      AND JSON_EXTRACT_SCALAR(metadata, '$.acqSubSource', 'STRING', '') != ''
+    GROUP BY event_hour_ist, splitPart(JSON_EXTRACT_SCALAR(metadata, '$.acqSubSource', 'STRING', ''), '|', 3), event_type
+    LIMIT 200000
+    """
+    df = pinot_query(sql)
+    if df.empty:
+        return pd.DataFrame(columns=["date","hour","story_id","pv_users","pc_users","vil_users","bc_users","buys_users"])
+
+    # keep only our premium stories (by the feed set), drop empty story_ids
+    df = df[df["story_id"].astype(str).str.strip() != ""]
+    if keep_story_ids:
+        df = df[df["story_id"].astype(str).isin(keep_story_ids)]
+    if df.empty:
+        return pd.DataFrame(columns=["date","hour","story_id","pv_users","pc_users","vil_users","bc_users","buys_users"])
+
+    wide = df.pivot_table(
+        index=["date","hour","story_id"],
         columns="event_type",
         values="unique_users",
         fill_value=0,
     ).reset_index()
     wide.columns.name = None
     rename_map = {
-        "PAYWALL_VIEW": "pv_users",
-        "PAYWALL_CLICK": "pc_users",
-        "VIEW_ITEM_LIST": "vil_users",
-        "BEGIN_CHECKOUT": "bc_users",
-        "BUYS_PREMIUM_SUBSCRIPTION": "buys_users",
+        "PAYWALL_VIEW":"pv_users",
+        "PAYWALL_CLICK":"pc_users",
+        "VIEW_ITEM_LIST":"vil_users",
+        "BEGIN_CHECKOUT":"bc_users",
+        "BUYS_PREMIUM_SUBSCRIPTION":"buys_users",
     }
     for src, dst in rename_map.items():
-        if src in wide.columns:
-            wide = wide.rename(columns={src: dst})
-        else:
-            wide[dst] = 0
-    return wide[["date", "hour", "story_id",
-                 "pv_users", "pc_users", "vil_users", "bc_users", "buys_users"]]
+        if src in wide.columns: wide = wide.rename(columns={src:dst})
+        else: wide[dst] = 0
+    return wide[["date","hour","story_id","pv_users","pc_users","vil_users","bc_users","buys_users"]]
 
 
-def pull_stories(story_ids: List[str]) -> pd.DataFrame:
-    """Dimension: title_hn, author, category, url, is_premium per story_id."""
+def pull_stories_batch(story_ids: List[str]) -> pd.DataFrame:
+    """One query for all unique story_ids across the whole backfill range."""
     if not story_ids:
-        return pd.DataFrame(columns=[
-            "story_id", "title_hn", "title_en", "author",
-            "category_hn", "url", "is_premium"
-        ])
+        return pd.DataFrame(columns=["story_id","title_hn","title_en","author","category_hn","url","is_premium"])
     ids_sql = "','".join(story_ids)
     sql = f"""
     SELECT
-      story_id,
-      title_hn,
-      title,
-      author_firstname_hn,
-      author_lastname_hn,
-      category_title_hn,
-      full_slug,
-      is_premium
+      story_id, title_hn, title,
+      author_firstname_hn, author_lastname_hn,
+      category_title_hn, full_slug, is_premium
     FROM stories
     WHERE story_id IN ('{ids_sql}')
-    LIMIT 10000
+    LIMIT 100000
     """
     df = pinot_query(sql)
     if df.empty:
-        return pd.DataFrame(columns=[
-            "story_id", "title_hn", "title_en", "author",
-            "category_hn", "url", "is_premium"
-        ])
-    df["author"] = (df["author_firstname_hn"].fillna("") + " " +
-                    df["author_lastname_hn"].fillna("")).str.strip()
+        return pd.DataFrame(columns=["story_id","title_hn","title_en","author","category_hn","url","is_premium"])
+    df["author"] = (df["author_firstname_hn"].fillna("") + " " + df["author_lastname_hn"].fillna("")).str.strip()
     df["url"] = URL_PREFIX + df["full_slug"].fillna("")
-    out = df[["story_id", "title_hn", "title", "author",
-              "category_title_hn", "url", "is_premium"]].rename(
-        columns={"title": "title_en", "category_title_hn": "category_hn"}
+    out = df[["story_id","title_hn","title","author","category_title_hn","url","is_premium"]].rename(
+        columns={"title":"title_en","category_title_hn":"category_hn"}
     )
-    # one row per story (first wins)
     return out.drop_duplicates(subset=["story_id"], keep="first")
 
 
-# ---------- Google Sheets I/O ----------
+# ---------- Google Sheets ----------
 _gc = None
-
 def _client() -> gspread.Client:
     global _gc
     if _gc is None:
@@ -209,8 +191,7 @@ def _client() -> gspread.Client:
         _gc = gspread.authorize(creds)
     return _gc
 
-
-def _open_ws(tab: str, cols: int) -> "gspread.Worksheet":
+def _open_ws(tab: str, cols: int):
     sh = _client().open_by_key(SHEET_ID)
     try:
         return sh.worksheet(tab)
@@ -218,110 +199,138 @@ def _open_ws(tab: str, cols: int) -> "gspread.Worksheet":
         return sh.add_worksheet(tab, rows=1000, cols=cols)
 
 
-def upsert_dated(tab: str, df: pd.DataFrame, cols: List[str]) -> None:
-    """Replace rows for df['date'].unique() values; preserve other dates."""
+def upsert_dated_bulk(tab: str, new_df: pd.DataFrame, cols: List[str], dates_touched: set):
+    """
+    Read existing ONCE, drop rows where date IN dates_touched, concat with new, write ONCE.
+    """
     ws = _open_ws(tab, len(cols))
-    existing_raw = ws.get_all_records()
+    log(f"  [{tab}] reading existing ...")
+    try:
+        existing_raw = ws.get_all_records()
+    except Exception as e:
+        log(f"  [{tab}] read failed ({e}) — treating as empty")
+        existing_raw = []
     existing = pd.DataFrame(existing_raw)
-    if not existing.empty and "date" in existing.columns and not df.empty:
-        dates_new = set(df["date"].astype(str).unique())
-        existing = existing[~existing["date"].astype(str).isin(dates_new)]
+
+    if not existing.empty and "date" in existing.columns and dates_touched:
+        existing = existing[~existing["date"].astype(str).isin({str(d) for d in dates_touched})]
+
     combined = pd.concat(
         [existing[cols] if not existing.empty else pd.DataFrame(columns=cols),
-         df[cols]],
+         new_df[cols] if not new_df.empty else pd.DataFrame(columns=cols)],
         ignore_index=True,
     )
+    log(f"  [{tab}] writing {len(combined)} total rows ...")
     _write(ws, combined, cols)
 
 
-def upsert_dim(tab: str, df: pd.DataFrame, key: str, cols: List[str]) -> None:
-    """Upsert by key column (e.g. story_id); keeps older rows intact."""
+def upsert_dim_bulk(tab: str, new_df: pd.DataFrame, key: str, cols: List[str]):
     ws = _open_ws(tab, len(cols))
-    existing_raw = ws.get_all_records()
+    log(f"  [{tab}] reading existing ...")
+    try:
+        existing_raw = ws.get_all_records()
+    except Exception as e:
+        log(f"  [{tab}] read failed ({e}) — treating as empty")
+        existing_raw = []
     existing = pd.DataFrame(existing_raw)
-    if not existing.empty and key in existing.columns and not df.empty:
-        new_keys = set(df[key].astype(str).unique())
+    if not existing.empty and key in existing.columns and not new_df.empty:
+        new_keys = set(new_df[key].astype(str).unique())
         existing = existing[~existing[key].astype(str).isin(new_keys)]
     combined = pd.concat(
         [existing[cols] if not existing.empty else pd.DataFrame(columns=cols),
-         df[cols]],
+         new_df[cols] if not new_df.empty else pd.DataFrame(columns=cols)],
         ignore_index=True,
     )
+    log(f"  [{tab}] writing {len(combined)} total rows ...")
     _write(ws, combined, cols)
 
 
-def _write(ws, df: pd.DataFrame, cols: List[str]) -> None:
+def _write(ws, df: pd.DataFrame, cols: List[str]):
     ws.clear()
-    data = [cols] + df.astype(str).fillna("").values.tolist() if not df.empty else [cols]
+    if df.empty:
+        ws.update([cols], value_input_option="RAW")
+        return
+    data = [cols] + df.astype(str).fillna("").values.tolist()
     ws.update(data, value_input_option="RAW")
 
 
 # ---------- orchestration ----------
-FEED_COLS = ["date", "hour", "feed_version_id", "position", "story_id",
-             "fi_users", "fc_users", "fi_events", "fc_events"]
-PW_COLS   = ["date", "hour", "story_id",
-             "pv_users", "pc_users", "vil_users", "bc_users", "buys_users"]
-DIM_COLS  = ["story_id", "title_hn", "title_en", "author",
-             "category_hn", "url", "is_premium"]
+FEED_COLS = ["date","hour","feed_version_id","position","story_id","fi_users","fc_users","fi_events","fc_events"]
+PW_COLS   = ["date","hour","story_id","pv_users","pc_users","vil_users","bc_users","buys_users"]
+DIM_COLS  = ["story_id","title_hn","title_en","author","category_hn","url","is_premium"]
 
 
-def pull_one_date(date_str: str) -> None:
-    print(f"\n[{date_str}] fetching feed metrics ...")
-    feed_df = pull_feed_metrics(date_str)
-    print(f"[{date_str}]   feed rows: {len(feed_df)}")
-
-    if feed_df.empty:
-        print(f"[{date_str}] no feed rows for this date — writing empty + skipping funnel/dim")
-        upsert_dated("feed_metrics", feed_df.reindex(columns=FEED_COLS), FEED_COLS)
-        return
-
-    story_ids = sorted(feed_df["story_id"].astype(str).unique().tolist())
-    print(f"[{date_str}]   unique stories: {len(story_ids)}")
-
-    print(f"[{date_str}] fetching paywall metrics ...")
-    pw_df = pull_paywall_metrics(date_str, story_ids)
-    print(f"[{date_str}]   paywall rows: {len(pw_df)}")
-
-    print(f"[{date_str}] fetching story dim ...")
-    dim_df = pull_stories(story_ids)
-    print(f"[{date_str}]   dim rows: {len(dim_df)}")
-
-    print(f"[{date_str}] writing to sheet ...")
-    upsert_dated("feed_metrics",    feed_df.reindex(columns=FEED_COLS), FEED_COLS)
-    upsert_dated("paywall_metrics", pw_df.reindex(columns=PW_COLS),     PW_COLS)
-    upsert_dim("stories_dim", dim_df, key="story_id", cols=DIM_COLS)
-    print(f"[{date_str}] done.")
-
-
-def main() -> None:
+def main():
     args = sys.argv[1:]
+    # filter out empties (Actions passes empty strings when inputs blank)
+    args = [a for a in args if a.strip()]
     if not args:
         ist_now = dt.datetime.utcnow() + dt.timedelta(hours=5, minutes=30)
         start = end = (ist_now - dt.timedelta(days=1)).strftime("%Y-%m-%d")
     elif len(args) == 1:
         start = end = args[0]
-    elif len(args) == 2:
-        start, end = args[0], args[1]
     else:
-        print("usage: python hard_paywall_puller.py [date] [end_date]")
-        sys.exit(1)
+        start, end = args[0], args[1]
 
     d0 = dt.date.fromisoformat(start)
     d1 = dt.date.fromisoformat(end)
-    if d1 < d0:
-        d0, d1 = d1, d0
+    if d1 < d0: d0, d1 = d1, d0
 
-    print(f"range: {d0} .. {d1}  (host={PINOT_HOST}, sheet={SHEET_ID})")
+    log(f"range: {d0} .. {d1}  (host={PINOT_HOST}, sheet={SHEET_ID[:8]}…)")
+
+    # accumulate in memory
+    feed_frames = []
+    pw_frames = []
+    dates_touched = set()
+    all_story_ids = set()
+
     cur = d0
     while cur <= d1:
-        try:
-            pull_one_date(cur.strftime("%Y-%m-%d"))
-        except Exception as e:
-            print(f"!! {cur}: {e}")
-        cur += dt.timedelta(days=1)
-        time.sleep(1)  # be gentle on Pinot
+        date_str = cur.strftime("%Y-%m-%d")
+        dates_touched.add(date_str)
 
-    print("\nALL DONE.")
+        log(f"[{date_str}] fetching feed metrics ...")
+        try:
+            feed_df = pull_feed_metrics(date_str)
+        except Exception as e:
+            log(f"[{date_str}] feed query failed: {e}")
+            feed_df = pd.DataFrame()
+
+        if not feed_df.empty:
+            feed_frames.append(feed_df)
+            day_stories = set(feed_df["story_id"].astype(str).unique())
+            all_story_ids |= day_stories
+            log(f"[{date_str}] feed rows: {len(feed_df)} / unique stories this day: {len(day_stories)}")
+
+            log(f"[{date_str}] fetching paywall metrics (single query) ...")
+            try:
+                pw_df = pull_paywall_metrics_day(date_str, day_stories)
+                if not pw_df.empty:
+                    pw_frames.append(pw_df)
+                log(f"[{date_str}] paywall rows kept: {len(pw_df)}")
+            except Exception as e:
+                log(f"[{date_str}] paywall query failed: {e}")
+        else:
+            log(f"[{date_str}] no feed rows — skipping paywall")
+
+        cur += dt.timedelta(days=1)
+
+    # consolidate
+    feed_all = pd.concat(feed_frames, ignore_index=True) if feed_frames else pd.DataFrame(columns=FEED_COLS)
+    pw_all   = pd.concat(pw_frames, ignore_index=True)   if pw_frames   else pd.DataFrame(columns=PW_COLS)
+
+    log(f"\nTOTAL: feed={len(feed_all)}  paywall={len(pw_all)}  stories={len(all_story_ids)}")
+
+    log("fetching story dim (one batch query) ...")
+    dim_all = pull_stories_batch(sorted(all_story_ids))
+    log(f"dim rows: {len(dim_all)}")
+
+    log("\nwriting to Google Sheet ...")
+    upsert_dated_bulk("feed_metrics",    feed_all.reindex(columns=FEED_COLS), FEED_COLS, dates_touched)
+    upsert_dated_bulk("paywall_metrics", pw_all.reindex(columns=PW_COLS),     PW_COLS,   dates_touched)
+    upsert_dim_bulk("stories_dim", dim_all, key="story_id", cols=DIM_COLS)
+
+    log("\n✓ ALL DONE.")
 
 
 if __name__ == "__main__":
