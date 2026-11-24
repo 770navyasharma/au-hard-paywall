@@ -40,5 +40,6 @@ jobs:
           GOOGLE_CREDS_JSON: ${{ secrets.GOOGLE_CREDS_JSON }}
           HOME_FEED_ID:      "1838"
           POSITIONS:         "5,13,21,27,28"
+          PYTHONUNBUFFERED:  "1"
         run: |
-          python puller/hard_paywall_puller.py ${{ github.event.inputs.date }} ${{ github.event.inputs.end_date }}
+          python -u puller/hard_paywall_puller.py ${{ github.event.inputs.date }} ${{ github.event.inputs.end_date }}
