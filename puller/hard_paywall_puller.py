@@ -115,31 +115,33 @@ def pull_feed_metrics(date_str: str) -> pd.DataFrame:
 
 def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame:
     """
-    ONE query per day. Extracts story_id from acqSubSource (3rd pipe field)
-    and GROUP BYs by it. Returns rows only for stories we care about.
+    ONE query per day. Uses events.story_id (flat column — confirmed populated
+    for PAYWALL_VIEW via diagnostic). Pre-filters to premium paywall events
+    only via acqSource (excludes e-paper paywall).
     """
     sql = f"""
     SELECT
       event_hour_ist,
-      splitPart(JSON_EXTRACT_SCALAR(metadata, '$.acqSubSource', 'STRING', ''), '|', 3) AS story_id,
+      story_id,
       event_type,
       DISTINCTCOUNT(user_id) AS unique_users
     FROM events
     WHERE event_date_ist = '{date_str}'
       AND event_type IN ('PAYWALL_VIEW','PAYWALL_CLICK','VIEW_ITEM_LIST','BEGIN_CHECKOUT','BUYS_PREMIUM_SUBSCRIPTION')
-      AND JSON_EXTRACT_SCALAR(metadata, '$.acqSubSource', 'STRING', '') != ''
-    GROUP BY event_hour_ist, splitPart(JSON_EXTRACT_SCALAR(metadata, '$.acqSubSource', 'STRING', ''), '|', 3), event_type
+      AND JSON_EXTRACT_SCALAR(metadata, '$.acqSource', 'STRING', '') LIKE '%premium%'
+      AND story_id IS NOT NULL
+      AND story_id != ''
+      AND story_id != 'null'
+    GROUP BY event_hour_ist, story_id, event_type
     LIMIT 200000
     """
     df = pinot_query(sql)
     if df.empty:
         return pd.DataFrame(columns=["date","hour","story_id","pv_users","pc_users","vil_users","bc_users","buys_users"])
 
-    # add date column + rename hour (date/hour are reserved in Pinot, so we add after the query)
+    # add date column + rename hour (reserved in Pinot, so added after query)
     df["date"] = date_str
     df = df.rename(columns={"event_hour_ist": "hour"})
-
-    # keep only our premium stories (by the feed set), drop empty story_ids
     df = df[df["story_id"].astype(str).str.strip() != ""]
     if keep_story_ids:
         df = df[df["story_id"].astype(str).isin(keep_story_ids)]
@@ -336,6 +338,18 @@ def main():
     log("fetching story dim (one batch query) ...")
     dim_all = pull_stories_batch(sorted(all_story_ids))
     log(f"dim rows: {len(dim_all)}")
+
+    # Filter to premium stories only — positions 5/13/21/27/28 contain non-premium
+    # stories too (personalized feed), but dashboard is for hard-paywall analysis.
+    if not dim_all.empty and "is_premium" in dim_all.columns:
+        premium_ids = set(
+            dim_all[dim_all["is_premium"].astype(str).str.lower() == "true"]["story_id"].astype(str)
+        )
+        before_feed, before_pw = len(feed_all), len(pw_all)
+        feed_all = feed_all[feed_all["story_id"].astype(str).isin(premium_ids)].copy()
+        pw_all   = pw_all[pw_all["story_id"].astype(str).isin(premium_ids)].copy()
+        dim_all  = dim_all[dim_all["story_id"].astype(str).isin(premium_ids)].copy()
+        log(f"premium filter: feed {before_feed}→{len(feed_all)}, paywall {before_pw}→{len(pw_all)}, dim kept {len(dim_all)}")
 
     log("\nwriting to Google Sheet ...")
     upsert_dated_bulk("feed_metrics",    feed_all.reindex(columns=FEED_COLS), FEED_COLS, dates_touched)
