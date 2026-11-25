@@ -99,6 +99,7 @@ def pull_feed_metrics(date_str: str) -> pd.DataFrame:
       AND feed_position IN ({pos_list})
       AND event_date_ist = '{date_str}'
       AND screen_name = 'foryou'
+      AND LOWER(platform) IN ('android','ios')
       AND story_id IS NOT NULL
       AND story_id != ''
       AND story_id != 'LOYALTY'
@@ -115,34 +116,53 @@ def pull_feed_metrics(date_str: str) -> pd.DataFrame:
 
 def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame:
     """
-    ONE query per day. Uses events.story_id (flat column — confirmed populated
-    for PAYWALL_VIEW via diagnostic). Pre-filters to premium paywall events
-    only via acqSource (excludes e-paper paywall).
+    ONE query per day. Resolves story_id for each event:
+      - PAYWALL_VIEW / PAYWALL_CLICK: events.story_id flat column (populated)
+      - VIEW_ITEM_LIST / BEGIN_CHECKOUT / BUYS: story_id is NULL on these events,
+        so we extract the 24-char ObjectId from metadata.acqSubSource via regex.
+    Pre-filtered to premium paywall events only via acqSource='pay wall | premium'
+    (excludes e-paper paywall).
     """
     sql = f"""
     SELECT
       event_hour_ist,
-      story_id,
+      CASE
+        WHEN story_id IS NOT NULL AND story_id != '' AND story_id != 'null'
+          THEN story_id
+        ELSE REGEXP_EXTRACT(JSON_EXTRACT_SCALAR(metadata, '$.acqSubSource', 'STRING', ''), '[a-f0-9]{{24}}')
+      END AS resolved_story_id,
       event_type,
       DISTINCTCOUNT(user_id) AS unique_users
     FROM events
     WHERE event_date_ist = '{date_str}'
-      AND event_type IN ('PAYWALL_VIEW','PAYWALL_CLICK','VIEW_ITEM_LIST','BEGIN_CHECKOUT','BUYS_PREMIUM_SUBSCRIPTION')
-      AND JSON_EXTRACT_SCALAR(metadata, '$.acqSource', 'STRING', '') LIKE '%premium%'
-      AND story_id IS NOT NULL
-      AND story_id != ''
-      AND story_id != 'null'
-    GROUP BY event_hour_ist, story_id, event_type
+      AND LOWER(platform) IN ('android','ios')
+      AND JSON_EXTRACT_SCALAR(metadata, '$.acqSource', 'STRING', '') = 'pay wall | premium'
+      AND (
+        (event_type IN ('PAYWALL_VIEW','PAYWALL_CLICK')
+          AND screen_name = 'articleDetailScreenview')
+        OR
+        (event_type IN ('VIEW_ITEM_LIST','BEGIN_CHECKOUT','BUYS_PREMIUM_SUBSCRIPTION')
+          AND screen_name = 'subscriptionScreen')
+      )
+    GROUP BY event_hour_ist,
+      CASE
+        WHEN story_id IS NOT NULL AND story_id != '' AND story_id != 'null'
+          THEN story_id
+        ELSE REGEXP_EXTRACT(JSON_EXTRACT_SCALAR(metadata, '$.acqSubSource', 'STRING', ''), '[a-f0-9]{{24}}')
+      END,
+      event_type
     LIMIT 200000
     """
     df = pinot_query(sql)
     if df.empty:
         return pd.DataFrame(columns=["date","hour","story_id","pv_users","pc_users","vil_users","bc_users","buys_users"])
 
-    # add date column + rename hour (reserved in Pinot, so added after query)
+    # add date column + rename to canonical names
     df["date"] = date_str
-    df = df.rename(columns={"event_hour_ist": "hour"})
+    df = df.rename(columns={"event_hour_ist": "hour", "resolved_story_id": "story_id"})
+    # drop rows where neither flat story_id nor regex extraction found a story
     df = df[df["story_id"].astype(str).str.strip() != ""]
+    df = df[df["story_id"].astype(str).str.strip() != "null"]
     if keep_story_ids:
         df = df[df["story_id"].astype(str).isin(keep_story_ids)]
     if df.empty:
