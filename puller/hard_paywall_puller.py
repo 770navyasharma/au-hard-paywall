@@ -83,9 +83,11 @@ def pull_feed_metrics(date_str: str) -> pd.DataFrame:
     # NOTE: do NOT alias to `date`, `hour`, or `position` in SQL — all three
     # are Pinot/Calcite reserved words. Add/rename in pandas after the query.
     pos_list = ",".join(str(p) for p in POSITIONS)
+    # event_hour_ist is unreliable (returns timestamp-like strings).
+    # event_time_ist is 'HH:MM:SS' — take first 2 chars for a clean hour.
     sql = f"""
     SELECT
-      event_hour_ist,
+      SUBSTR(event_time_ist, 1, 2) AS hour_ist,
       feed_version_id,
       feed_position,
       story_id,
@@ -103,14 +105,19 @@ def pull_feed_metrics(date_str: str) -> pd.DataFrame:
       AND story_id IS NOT NULL
       AND story_id != ''
       AND story_id != 'LOYALTY'
-    GROUP BY event_hour_ist, feed_version_id, feed_position, story_id
+    GROUP BY SUBSTR(event_time_ist, 1, 2), feed_version_id, feed_position, story_id
     LIMIT 100000
     """
     df = pinot_query(sql)
     if df.empty:
         return df
     df["date"] = date_str
-    df = df.rename(columns={"event_hour_ist": "hour", "feed_position": "position"})
+    df = df.rename(columns={"hour_ist": "hour", "feed_position": "position"})
+    # ensure hour is clean 2-digit string, counts are proper ints
+    df["hour"] = df["hour"].astype(str).str.strip().str.zfill(2)
+    for c in ["fi_users","fc_users","fi_events","fc_events"]:
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).astype(int)
     return df
 
 
@@ -125,7 +132,7 @@ def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame
     """
     sql = f"""
     SELECT
-      event_hour_ist,
+      SUBSTR(event_time_ist, 1, 2) AS hour_ist,
       CASE
         WHEN story_id IS NOT NULL AND story_id != '' AND story_id != 'null'
           THEN story_id
@@ -144,7 +151,7 @@ def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame
         (event_type IN ('VIEW_ITEM_LIST','BEGIN_CHECKOUT','BUYS_PREMIUM_SUBSCRIPTION')
           AND screen_name = 'subscriptionScreen')
       )
-    GROUP BY event_hour_ist,
+    GROUP BY SUBSTR(event_time_ist, 1, 2),
       CASE
         WHEN story_id IS NOT NULL AND story_id != '' AND story_id != 'null'
           THEN story_id
@@ -159,7 +166,8 @@ def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame
 
     # add date column + rename to canonical names
     df["date"] = date_str
-    df = df.rename(columns={"event_hour_ist": "hour", "resolved_story_id": "story_id"})
+    df = df.rename(columns={"hour_ist": "hour", "resolved_story_id": "story_id"})
+    df["hour"] = df["hour"].astype(str).str.strip().str.zfill(2)
     # drop rows where neither flat story_id nor regex extraction found a story
     df = df[df["story_id"].astype(str).str.strip() != ""]
     df = df[df["story_id"].astype(str).str.strip() != "null"]
@@ -185,6 +193,8 @@ def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame
     for src, dst in rename_map.items():
         if src in wide.columns: wide = wide.rename(columns={src:dst})
         else: wide[dst] = 0
+    for c in ["pv_users","pc_users","vil_users","bc_users","buys_users"]:
+        wide[c] = pd.to_numeric(wide[c], errors="coerce").fillna(0).astype(int)
     return wide[["date","hour","story_id","pv_users","pc_users","vil_users","bc_users","buys_users"]]
 
 
