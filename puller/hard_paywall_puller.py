@@ -43,7 +43,7 @@ HOME_FEED_ID = int(os.environ.get("HOME_FEED_ID", "1838"))
 POSITIONS    = [int(x) for x in os.environ.get("POSITIONS", "5,13,21,27,28").split(",")]
 URL_PREFIX   = os.environ.get("URL_PREFIX", "https://www.amarujala.com/")
 
-PINOT_QUERY_URL = f"{PINOT_HOST}/query/sql"
+PINOT_QUERY_URL = f"{PINOT_HOST}/sql"   # controller endpoint (port 9000 — publicly reachable)
 TIMEOUT = 180
 
 
@@ -56,7 +56,7 @@ def pinot_query(sql: str) -> pd.DataFrame:
     t0 = time.time()
     r = requests.post(
         PINOT_QUERY_URL,
-        json={"sql": sql},
+        json={"sql": sql, "queryOptions": "useMultistageEngine=true"},
         auth=(PINOT_USER, PINOT_PASSWORD),
         timeout=TIMEOUT,
     )
