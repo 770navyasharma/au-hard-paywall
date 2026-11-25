@@ -165,9 +165,15 @@
         <div class="msel-panel" data-role="panel"></div>
       </div>
 
-      <h3>Metric columns</h3>
+      <h3>Group by (dimensions)</h3>
+      <div class="msel" data-key="dims">
+        <button class="msel-btn" data-role="btn">Group by…</button>
+        <div class="msel-panel" data-role="panel"></div>
+      </div>
+
+      <h3>Metrics to show</h3>
       <div class="msel" data-key="metrics">
-        <button class="msel-btn" data-role="btn">All metrics</button>
+        <button class="msel-btn" data-role="btn">Metrics…</button>
         <div class="msel-panel" data-role="panel"></div>
       </div>
     </aside>
@@ -228,39 +234,56 @@ const CSV_URLS = {
    State
    ========================================================================= */
 const STATE = {
-  feed: [], paywall: [], dim: {},     // raw data
-  joined: [],                          // feed JOIN paywall JOIN dim
+  feed: [], paywall: [], dim: {},
+  joined: [],
   filters: {
     dateFrom:null, dateTo:null,
     hourFrom:0, hourTo:23,
     position:new Set(), feed_version_id:new Set(),
     story_id:new Set(), author:new Set(),
-    metrics:new Set(), search:''
+    search:''
   },
+  dims:    new Set(),   // which dimension columns to GROUP BY
+  metrics: new Set(),   // which metric columns to SHOW
   sort: {col:'fi_users', dir:'desc'}
 };
 
-const METRIC_COLS = [
-  // key, label, align, kind(num|pct|text), always
-  ['date',             'Date',         'c', 'text', true],
-  ['hour',             'Hr',           'c', 'text', true],
-  ['position',         'Pos',          'c', 'num',  true],
-  ['feed_version_id',  'Ver',          'c', 'num',  false],
-  ['story',            'Story',        'l', 'text', true],
-  ['author',           'Author',       'l', 'text', false],
-  ['fi_users',         'FI users',     'r', 'num',  true],
-  ['fc_users',         'FC users',     'r', 'num',  true],
-  ['feed_ctr',         'Feed CTR',     'r', 'pct',  true],
-  ['pv_users',         'PV users',     'r', 'num',  true],
-  ['pc_users',         'PC users',     'r', 'num',  true],
-  ['paywall_ctr',      'PW CTR',       'r', 'pct',  true],
-  ['vil_users',        'VIL users',    'r', 'num',  false],
-  ['pv_to_vil',        'PV→VIL',       'r', 'pct',  false],
-  ['bc_users',         'BC users',     'r', 'num',  false],
-  ['vil_to_bc',        'VIL→BC',       'r', 'pct',  false],
-  ['buys_users',       'BUYS',         'r', 'num',  true],
-  ['pv_to_buys',       'PV→BUYS',      'r', 'pct',  false],
+// Dimensions — user ticks which to group rows by. Un-ticking collapses rows across that dim.
+const DIMENSIONS = [
+  // key, label, isPaywallCompatible
+  ['date',            'Date',          true],
+  ['hour',            'Hour (IST)',    true],
+  ['position',        'Position',      false], // paywall events don't carry position
+  ['feed_version_id', 'Feed Version',  false], // paywall events don't carry version
+  ['story_id',        'Story ID',      true],
+  ['title_hn',        'Story Title',   true],
+  ['author',          'Author',        true],
+  ['category_hn',     'Category',      true],
+  ['url',             'URL',           true],
 ];
+const DEFAULT_DIMS = ['hour','position','story_id','title_hn'];
+
+// Metrics — user ticks which columns to display. Derived CTRs computed AFTER aggregation.
+const METRICS = [
+  // key, label, kind (num|pct), derived={num,den} or null
+  ['fi_users',    'Feed Impressions (users)',  'num', null],
+  ['fc_users',    'Feed Clicks (users)',       'num', null],
+  ['feed_ctr',    'Feed CTR',                  'pct', {num:'fc_users', den:'fi_users'}],
+  ['pv_users',    'Paywall Views (users)',     'num', null],
+  ['pc_users',    'Paywall Clicks (users)',    'num', null],
+  ['paywall_ctr', 'Paywall CTR',               'pct', {num:'pc_users', den:'pv_users'}],
+  ['vil_users',   'Plan Page Views (users)',   'num', null],
+  ['pv_to_vil',   'PV → Plan %',               'pct', {num:'vil_users', den:'pv_users'}],
+  ['bc_users',    'Begin Checkout (users)',    'num', null],
+  ['vil_to_bc',   'Plan → Checkout %',         'pct', {num:'bc_users', den:'vil_users'}],
+  ['buys_users',  'Purchases (users)',         'num', null],
+  ['pv_to_buys',  'PV → Purchase %',           'pct', {num:'buys_users', den:'pv_users'}],
+];
+const DEFAULT_METRICS = ['fi_users','fc_users','feed_ctr','pv_users','pc_users','paywall_ctr','buys_users'];
+
+const PAYWALL_RAW_KEYS = ['pv_users','pc_users','vil_users','bc_users','buys_users'];
+const FEED_RAW_KEYS    = ['fi_users','fc_users','fi_events','fc_events'];
+const DERIVED_KEYS     = METRICS.filter(m => m[3]).map(m => m[0]);
 
 /* =========================================================================
    Boot
@@ -392,13 +415,18 @@ function buildFilterOptions(){
     };
   }).sort((a,b)=>a.lbl.localeCompare(b.lbl));
   const authOpts = unique(STATE.joined, 'author').filter(Boolean).sort().map(v=>({val:v, lbl:v}));
-  const metricOpts = METRIC_COLS.filter(c=>!c[4]).map(c=>({val:c[0], lbl:c[1]}));
+  const dimOpts    = DIMENSIONS.map(d=>({val:d[0], lbl:d[1]}));
+  const metricOpts = METRICS.map(m=>({val:m[0], lbl:m[1]}));
 
   initMSel('position', posOpts, true);
   initMSel('feed_version_id', verOpts, true);
   initMSel('story_id', storyOpts, true);
   initMSel('author', authOpts, true);
-  initMSel('metrics', metricOpts, true);
+  // Dims + Metrics: initialize with sensible defaults, not "all"
+  DEFAULT_DIMS.forEach(k    => STATE.dims.add(k));
+  DEFAULT_METRICS.forEach(k => STATE.metrics.add(k));
+  initMSel('dims',    dimOpts,    false);
+  initMSel('metrics', metricOpts, false);
 
   // bind events
   ['dateFrom','dateTo'].forEach(id=>{
@@ -486,7 +514,7 @@ function initMSel(key, opts, allChecked){
 
 function labelOf(k, n){
   return ({position:'positions', feed_version_id:'versions', story_id:'stories',
-           author:'authors', metrics:'metrics'})[k] || 'items';
+           author:'authors', dims:'dimensions', metrics:'metrics'})[k] || 'items';
 }
 
 /* =========================================================================
@@ -513,23 +541,72 @@ function applyFilters(){
 }
 
 function render(){
-  const rows = applyFilters();
-  rows.sort(cmp(STATE.sort.col, STATE.sort.dir));
-  renderKpis(rows);
-  renderChart(rows);
-  renderTable(rows);
+  const filtered = applyFilters();
+  // KPIs + chart always use the full filtered set (not aggregated)
+  renderKpis(filtered);
+  renderChart(filtered);
+  // Table uses aggregated rows by selected dimensions
+  const dimKeys = DIMENSIONS.map(d => d[0]).filter(k => STATE.dims.has(k));
+  const aggRows = aggregate(filtered, dimKeys);
+  // ensure sort col is still valid; if not, fall back to first visible metric
+  const visibleKeys = new Set([...dimKeys, ...METRICS.filter(m=>STATE.metrics.has(m[0])).map(m=>m[0])]);
+  if (!visibleKeys.has(STATE.sort.col)){
+    STATE.sort.col = [...visibleKeys].pop() || 'fi_users';
+  }
+  aggRows.sort(cmp(STATE.sort.col, STATE.sort.dir));
+  renderTable(aggRows, dimKeys);
   document.getElementById('rowCount').textContent =
-    `${rows.length.toLocaleString()} rows · ${new Set(rows.map(r=>r.story_id)).size} stories`;
+    `${aggRows.length.toLocaleString()} groups · ${filtered.length.toLocaleString()} raw rows · ${new Set(filtered.map(r=>r.story_id)).size} stories`;
 }
 
 function cmp(col, dir){
   const s = dir==='asc' ? 1 : -1;
   return (a,b) => {
     let av=a[col], bv=b[col];
-    if (col==='story') { av=a.title_hn||a.story_id; bv=b.title_hn||b.story_id; }
     if (typeof av==='number' && typeof bv==='number') return (av-bv)*s;
-    return String(av||'').localeCompare(String(bv||''))*s;
+    return String(av==null?'':av).localeCompare(String(bv==null?'':bv), undefined, {numeric:true})*s;
   };
+}
+
+/* Aggregate filtered rows by selected dimensions.
+   Paywall funnel is deduped on (date, hour, story_id) to prevent double
+   counting when position/version dims are selected (paywall data is identical
+   across position/version rows for the same (date, hour, story_id)). */
+function aggregate(rows, selectedDimKeys){
+  const agg = {};
+  rows.forEach(r => {
+    const key = selectedDimKeys.length
+      ? selectedDimKeys.map(d => r[d] == null ? '' : r[d]).join('\u0001')
+      : '__total__';
+    if (!agg[key]){
+      const bucket = {_dims:{}, _pwSeen:new Set(),
+        fi_users:0, fc_users:0, fi_events:0, fc_events:0,
+        pv_users:0, pc_users:0, vil_users:0, bc_users:0, buys_users:0};
+      selectedDimKeys.forEach(d => bucket._dims[d] = r[d]);
+      agg[key] = bucket;
+    }
+    const b = agg[key];
+    b.fi_users += r.fi_users||0; b.fc_users += r.fc_users||0;
+    b.fi_events += r.fi_events||0; b.fc_events += r.fc_events||0;
+    const pwKey = `${r.date}\u0001${r.hour}\u0001${r.story_id}`;
+    if (!b._pwSeen.has(pwKey)){
+      b._pwSeen.add(pwKey);
+      b.pv_users += r.pv_users||0; b.pc_users += r.pc_users||0;
+      b.vil_users += r.vil_users||0; b.bc_users += r.bc_users||0;
+      b.buys_users += r.buys_users||0;
+    }
+  });
+  // compute derived (%) metrics after aggregation
+  return Object.values(agg).map(b => {
+    DERIVED_KEYS.forEach(k => {
+      const d = METRICS.find(m => m[0]===k)[3];
+      b[k] = b[d.den] ? b[d.num]/b[d.den] : 0;
+    });
+    delete b._pwSeen;
+    // flatten dim values to top-level for sort/search convenience
+    Object.entries(b._dims).forEach(([k,v]) => b[k] = v);
+    return b;
+  });
 }
 
 function renderKpis(rows){
@@ -596,45 +673,67 @@ function renderChart(rows){
   document.getElementById('chartNote').textContent = rows.length ? '' : ' · empty selection';
 }
 
-function renderTable(rows){
-  const F = STATE.filters;
-  const visible = METRIC_COLS.filter(c => c[4] || F.metrics.has(c[0]));
+function renderTable(rows, dimKeys){
+  // build visible column list: dim columns (as picked) + metric columns (as picked)
+  const dimCols = dimKeys.map(k => {
+    const d = DIMENSIONS.find(x => x[0]===k);
+    return {key:k, label:d[1], kind:'text', align:'l'};
+  });
+  const metricCols = METRICS.filter(m => STATE.metrics.has(m[0])).map(m => ({
+    key:m[0], label:m[1], kind:m[2], align:'r'
+  }));
+  const visible = [...dimCols, ...metricCols];
+
+  if (!visible.length){
+    document.getElementById('thead').innerHTML = '';
+    document.getElementById('tbody').innerHTML = `<tr><td class="empty">Pick at least one dimension or metric from the sidebar.</td></tr>`;
+    return;
+  }
+
   // header
-  document.getElementById('thead').innerHTML = visible.map(c=>{
-    const cls = (c[2]==='r'?'r':c[2]==='c'?'c':'');
-    const sorted = STATE.sort.col===c[0] ? 'sorted' : '';
-    const arr = STATE.sort.col===c[0] ? (STATE.sort.dir==='asc'?'▲':'▼') : '';
-    return `<th class="${cls} ${sorted}" data-col="${c[0]}">${c[1]}<span class="arr">${arr}</span></th>`;
+  document.getElementById('thead').innerHTML = visible.map(c => {
+    const cls = c.align==='r' ? 'r' : '';
+    const sorted = STATE.sort.col===c.key ? 'sorted' : '';
+    const arr = STATE.sort.col===c.key ? (STATE.sort.dir==='asc'?'▲':'▼') : '';
+    return `<th class="${cls} ${sorted}" data-col="${c.key}">${escapeHtml(c.label)}<span class="arr">${arr}</span></th>`;
   }).join('');
-  document.querySelectorAll('thead th').forEach(th=>{
-    th.addEventListener('click', ()=>{
+  document.querySelectorAll('thead th').forEach(th => {
+    th.addEventListener('click', () => {
       const col = th.dataset.col;
       if (STATE.sort.col===col) STATE.sort.dir = STATE.sort.dir==='asc' ? 'desc' : 'asc';
       else { STATE.sort.col = col; STATE.sort.dir = 'desc'; }
       render();
     });
   });
+
   // body
   const body = document.getElementById('tbody');
-  if (!rows.length) { body.innerHTML = `<tr><td class="empty" colspan="${visible.length}">No rows match your filters.</td></tr>`; return; }
+  if (!rows.length){
+    body.innerHTML = `<tr><td class="empty" colspan="${visible.length}">No rows match your filters.</td></tr>`;
+    return;
+  }
   const frag = document.createDocumentFragment();
   const maxRows = 2000;
-  rows.slice(0, maxRows).forEach(r=>{
+  rows.slice(0, maxRows).forEach(r => {
     const tr = document.createElement('tr');
-    tr.innerHTML = visible.map(c=>{
-      const cls = (c[2]==='r'?'r':c[2]==='c'?'c':'')+' '+(c[3]==='num'||c[3]==='pct'?'num':'');
-      let v = r[c[0]];
-      if (c[0]==='story'){
-        const title = r.title_hn || r.title_en || r.story_id;
-        const link = r.url ? `<a href="${escAttr(r.url)}" target="_blank" rel="noopener">${escapeHtml(title)}</a>` : escapeHtml(title);
-        return `<td class="title-hn">${link}<div class="sid">${escapeHtml(r.story_id)}</div></td>`;
-      }
-      if (c[3]==='pct'){
+    tr.innerHTML = visible.map(c => {
+      const v = r[c.key];
+      const clsBase = c.align==='r' ? 'r num' : '';
+      if (c.kind==='pct'){
         const low = (v||0) < 0.005 ? 'low' : '';
-        return `<td class="${cls}"><span class="ctr ${low}">${pct(v||0)}</span></td>`;
+        return `<td class="${clsBase}"><span class="ctr ${low}">${pct(v||0)}</span></td>`;
       }
-      if (c[3]==='num'){ return `<td class="${cls}">${fmt(v||0)}</td>`; }
-      return `<td class="${cls}">${escapeHtml(v==null?'':String(v))}</td>`;
+      if (c.kind==='num'){
+        return `<td class="${clsBase}">${fmt(v||0)}</td>`;
+      }
+      // dim text column — render story title as link if url is available on the row
+      if (c.key==='title_hn' && r.url){
+        return `<td class="title-hn"><a href="${escAttr(r.url)}" target="_blank" rel="noopener">${escapeHtml(v||'—')}</a></td>`;
+      }
+      if (c.key==='url' && v){
+        return `<td class="title-hn"><a href="${escAttr(v)}" target="_blank" rel="noopener">${escapeHtml(v)}</a></td>`;
+      }
+      return `<td>${escapeHtml(v==null?'':String(v))}</td>`;
     }).join('');
     frag.appendChild(tr);
   });
@@ -642,25 +741,26 @@ function renderTable(rows){
   body.appendChild(frag);
   if (rows.length > maxRows){
     const tr = document.createElement('tr');
-    tr.innerHTML = `<td class="empty" colspan="${visible.length}">… ${fmt(rows.length-maxRows)} more rows hidden. Use filters to narrow, or Download CSV.</td>`;
+    tr.innerHTML = `<td class="empty" colspan="${visible.length}">… ${fmt(rows.length-maxRows)} more groups hidden. Narrow via filters or Download CSV.</td>`;
     body.appendChild(tr);
   }
 }
 
 function downloadCsv(){
-  const rows = applyFilters();
+  const filtered = applyFilters();
+  const dimKeys = DIMENSIONS.map(d => d[0]).filter(k => STATE.dims.has(k));
+  const metricKeys = METRICS.filter(m => STATE.metrics.has(m[0])).map(m => m[0]);
+  const rows = aggregate(filtered, dimKeys);
   rows.sort(cmp(STATE.sort.col, STATE.sort.dir));
-  const cols = ['date','hour','position','feed_version_id','story_id','title_hn','author','category_hn','url',
-                'fi_users','fc_users','feed_ctr','pv_users','pc_users','paywall_ctr',
-                'vil_users','pv_to_vil','bc_users','vil_to_bc','buys_users','pv_to_buys'];
-  const lines = [cols.join(',')];
-  rows.forEach(r=>{
-    lines.push(cols.map(c=>{
-      let v=r[c]; if (v==null) v='';
-      v = String(v).replace(/"/g,'""');
-      return /[,"\n]/.test(v) ? `"${v}"` : v;
-    }).join(','));
-  });
+  // CSV headers = friendly labels for the currently visible columns
+  const headerCols = [
+    ...dimKeys.map(k => DIMENSIONS.find(d => d[0]===k)[1]),
+    ...metricKeys.map(k => METRICS.find(m => m[0]===k)[1])
+  ];
+  const keyCols = [...dimKeys, ...metricKeys];
+  const esc = v => { v = v==null ? '' : String(v); v = v.replace(/"/g,'""'); return /[,"\n]/.test(v) ? `"${v}"` : v; };
+  const lines = [headerCols.map(esc).join(',')];
+  rows.forEach(r => lines.push(keyCols.map(k => esc(r[k])).join(',')));
   const blob = new Blob([lines.join('\n')], {type:'text/csv;charset=utf-8'});
   const a = document.createElement('a');
   a.href = URL.createObjectURL(blob);
