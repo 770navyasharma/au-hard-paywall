@@ -80,13 +80,14 @@ def pinot_query(sql: str) -> pd.DataFrame:
 
 # ---------- extractors ----------
 def pull_feed_metrics(date_str: str) -> pd.DataFrame:
+    # NOTE: do NOT alias to `date`, `hour`, or `position` in SQL — all three
+    # are Pinot/Calcite reserved words. Add/rename in pandas after the query.
     pos_list = ",".join(str(p) for p in POSITIONS)
     sql = f"""
     SELECT
-      '{date_str}' AS date,
-      event_hour_ist AS hour,
+      event_hour_ist,
       feed_version_id,
-      feed_position AS position,
+      feed_position,
       story_id,
       DISTINCTCOUNT(CASE WHEN event_type='FEED_IMPRESSION' THEN user_id END) AS fi_users,
       DISTINCTCOUNT(CASE WHEN event_type='FEED_CLICK'      THEN user_id END) AS fc_users,
@@ -104,7 +105,12 @@ def pull_feed_metrics(date_str: str) -> pd.DataFrame:
     GROUP BY event_hour_ist, feed_version_id, feed_position, story_id
     LIMIT 100000
     """
-    return pinot_query(sql)
+    df = pinot_query(sql)
+    if df.empty:
+        return df
+    df["date"] = date_str
+    df = df.rename(columns={"event_hour_ist": "hour", "feed_position": "position"})
+    return df
 
 
 def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame:
@@ -114,8 +120,7 @@ def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame
     """
     sql = f"""
     SELECT
-      '{date_str}' AS date,
-      event_hour_ist AS hour,
+      event_hour_ist,
       splitPart(JSON_EXTRACT_SCALAR(metadata, '$.acqSubSource', 'STRING', ''), '|', 3) AS story_id,
       event_type,
       DISTINCTCOUNT(user_id) AS unique_users
@@ -129,6 +134,10 @@ def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame
     df = pinot_query(sql)
     if df.empty:
         return pd.DataFrame(columns=["date","hour","story_id","pv_users","pc_users","vil_users","bc_users","buys_users"])
+
+    # add date column + rename hour (date/hour are reserved in Pinot, so we add after the query)
+    df["date"] = date_str
+    df = df.rename(columns={"event_hour_ist": "hour"})
 
     # keep only our premium stories (by the feed set), drop empty story_ids
     df = df[df["story_id"].astype(str).str.strip() != ""]
