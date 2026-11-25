@@ -133,6 +133,10 @@
   <span class="kw">COUNT</span>(<span class="kw">CASE WHEN</span> event_type=<span class="str">'FEED_IMPRESSION'</span> <span class="kw">THEN</span> <span class="str">1</span> <span class="kw">END</span>) <span class="kw">AS</span> fi_events,
   <span class="kw">COUNT</span>(<span class="kw">CASE WHEN</span> event_type=<span class="str">'FEED_CLICK'</span>      <span class="kw">THEN</span> <span class="str">1</span> <span class="kw">END</span>) <span class="kw">AS</span> fc_events
 <span class="kw">FROM</span> events
+<span class="cm">-- hour extracted from event_time_ist (HH:MM:SS) — event_hour_ist is unreliable</span>
+<span class="kw">SELECT</span>
+  <span class="kw">SUBSTR</span>(event_time_ist, 1, 2) <span class="kw">AS</span> hour_ist,
+  feed_version_id, feed_position, story_id, ...
 <span class="kw">WHERE</span> event_type <span class="kw">IN</span> (<span class="str">'FEED_IMPRESSION'</span>,<span class="str">'FEED_CLICK'</span>)
   <span class="kw">AND</span> feed_id = <span class="str">1838</span>
   <span class="kw">AND</span> feed_position <span class="kw">IN</span> (<span class="str">5,13,21,27,28</span>)
