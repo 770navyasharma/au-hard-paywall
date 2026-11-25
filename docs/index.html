@@ -225,9 +225,9 @@
    File → Share → Publish to web → pick tab → CSV → copy URL.
    ========================================================================= */
 const CSV_URLS = {
-  feed:    'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=1037533346&single=true&output=csv',
-  paywall: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=822394355&single=true&output=csv',
-  dim:     'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=286162334&single=true&output=csv',
+  feed:    'PASTE_FEED_METRICS_CSV_URL_HERE',
+  paywall: 'PASTE_PAYWALL_METRICS_CSV_URL_HERE',
+  dim:     'PASTE_STORIES_DIM_CSV_URL_HERE',
 };
 
 /* =========================================================================
@@ -458,7 +458,8 @@ function initMSel(key, opts, allChecked){
   const el = document.querySelector(`.msel[data-key="${key}"]`);
   const btn = el.querySelector('[data-role="btn"]');
   const panel = el.querySelector('[data-role="panel"]');
-  const set = STATE.filters[key];
+  // dims and metrics sets live at the top level of STATE; filter sets live in STATE.filters
+  const set = (key==='dims' || key==='metrics') ? STATE[key] : STATE.filters[key];
   if (allChecked) opts.forEach(o=>set.add(String(o.val)));
 
   panel.innerHTML = `
