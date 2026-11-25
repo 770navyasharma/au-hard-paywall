@@ -54,9 +54,12 @@ def log(msg: str):
 # ---------- Pinot ----------
 def pinot_query(sql: str) -> pd.DataFrame:
     t0 = time.time()
+    # NOTE: no useMultistageEngine — MSE's Calcite parser treats "date" and "hour"
+    # as reserved words and rejects `... AS date`. Our queries are simple aggregates
+    # so single-stage engine (default) works and is faster.
     r = requests.post(
         PINOT_QUERY_URL,
-        json={"sql": sql, "queryOptions": "useMultistageEngine=true"},
+        json={"sql": sql},
         auth=(PINOT_USER, PINOT_PASSWORD),
         timeout=TIMEOUT,
     )
