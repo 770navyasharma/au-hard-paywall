@@ -88,7 +88,7 @@
     <a href="index.html" class="back">← back to dashboard</a>
     <div class="kicker">Amar Ujala · reader revenue · app</div>
     <h1>Compare windows <span id="dataPill" class="pill">loading…</span></h1>
-    <p class="sub">Pick date + hour ranges. Each window shows aggregated funnel metrics. Toggle <b>baseline</b> to auto-add the "rest of that day" for each selected window — useful for A/B comparing a headline-change window against the unchanged hours.</p>
+    <p class="sub">Pick date + hour ranges. Add as many windows as you want — compare funnel metrics side by side. δ% is change from the first window. Useful: add one window for when a headline was live and another for when it wasn't.</p>
   </div>
 </header>
 
@@ -116,10 +116,6 @@
       </div>
       <button class="addbtn" id="addWin">+ Add window</button>
     </div>
-    <label class="baseline-toggle">
-      <input type="checkbox" id="baselineChk" checked>
-      Include baseline (rest of day) for each window — compare against unselected hours
-    </label>
   </section>
 
   <!-- WINDOW CHIPS -->
@@ -204,7 +200,6 @@ const STATE = {
   feed: [], paywall: [], dim: {},
   joined: [],         // one row per (date, hour, position, version, story_id) with all metrics
   windows: [],        // array of {id, date, from, to, label}
-  baselines: true,
 };
 
 /* =========================================================================
@@ -315,10 +310,6 @@ function initEditor(){
   fromSel.value = 0; toSel.value = 23;
 
   document.getElementById('addWin').addEventListener('click', addWindow);
-  document.getElementById('baselineChk').addEventListener('change', e=>{
-    STATE.baselines = e.target.checked;
-    renderAll();
-  });
 }
 
 function addWindow(){
@@ -346,10 +337,7 @@ function winLabel(w){
   const base = w.label ? w.label + ' · ' : '';
   return `${base}${d} ${pad2(w.from)}–${pad2(w.to)}h`;
 }
-function baseLabel(w){
-  const d = new Date(w.date+'T00:00').toLocaleDateString('en-IN', {day:'numeric',month:'short'});
-  return `baseline · ${d} rest of day`;
-}
+
 
 /* =========================================================================
    Aggregation per window — with paywall dedupe on (date,hour,story_id)
@@ -383,9 +371,7 @@ function aggregateWindow(filter){
 function windowFilter(w){
   return r => r.date === w.date && r.hr >= w.from && r.hr <= w.to;
 }
-function baselineFilter(w){
-  return r => r.date === w.date && (r.hr < w.from || r.hr > w.to);
-}
+
 
 /* =========================================================================
    Render everything
@@ -400,20 +386,11 @@ function renderAll(){
   document.getElementById('results').style.display = 'none';
   document.getElementById('hasResults').style.display = 'block';
 
-  // Build the list of series: each window, optionally followed by its baseline
-  const series = [];
-  STATE.windows.forEach((w, i) => {
-    series.push({
-      key: w.id, label: winLabel(w), color: WIN_COLORS[i % WIN_COLORS.length],
-      isBaseline: false, agg: aggregateWindow(windowFilter(w))
-    });
-    if (STATE.baselines){
-      series.push({
-        key: w.id+'_base', label: baseLabel(w), color: BASE_COLOR,
-        isBaseline: true, agg: aggregateWindow(baselineFilter(w))
-      });
-    }
-  });
+  // One series per user-added window
+  const series = STATE.windows.map((w, i) => ({
+    key: w.id, label: winLabel(w), color: WIN_COLORS[i % WIN_COLORS.length],
+    agg: aggregateWindow(windowFilter(w))
+  }));
 
   renderCtrChart(series);
   renderTable(series);
@@ -443,8 +420,7 @@ function renderCtrChart(series){
     data: CHART_METRICS.map(k => (s.agg[k]||0) * 100),
     backgroundColor: s.color,
     borderColor: s.color,
-    borderWidth: s.isBaseline ? 1 : 0,
-    borderDash: s.isBaseline ? [4,3] : [],
+    borderWidth: 0,
     borderRadius: 4,
   }));
   if (_ctrChart) _ctrChart.destroy();
@@ -507,8 +483,7 @@ function renderFunnelChart(series){
     label: s.label,
     data: stages.map(k => s.agg[k]||0),
     backgroundColor: s.color, borderColor: s.color,
-    borderWidth: s.isBaseline ? 1 : 0,
-    borderDash: s.isBaseline ? [4,3] : [],
+    borderWidth: 0,
     borderRadius: 4,
   }));
   if (_funnelChart) _funnelChart.destroy();
