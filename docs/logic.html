@@ -1,0 +1,215 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AU · Hard Paywall — how it works</title>
+<style>
+  :root{
+    --ink:#0d0f14; --panel:#14171f; --panel-2:#1b1f2a; --line:#262b38; --line-2:#333a4b;
+    --steel:#8a94a6; --steel-dim:#5b6474; --paper:#e8ebf2;
+    --amber:#f4b942; --teal:#3fb9a3; --key:#ff8a80;
+    --mono: ui-monospace,"SF Mono","JetBrains Mono","Cascadia Mono",Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--ink);color:var(--paper);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.55}
+  body{padding:0 0 80px}
+  .wrap{max-width:900px;margin:0 auto;padding:0 22px}
+
+  header.top{border-bottom:1px solid var(--line);padding:22px 0 18px;margin-bottom:24px}
+  .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:var(--steel-dim)}
+  h1{font-size:24px;font-weight:650;letter-spacing:-.01em;margin:6px 0 10px}
+  .back{display:inline-block;font-family:var(--mono);font-size:12px;color:var(--teal);text-decoration:none;margin-bottom:8px}
+  .back:hover{color:var(--amber)}
+
+  .tabs{display:flex;gap:4px;background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:4px;margin-bottom:24px;max-width:360px}
+  .tabs button{flex:1;background:transparent;border:0;color:var(--steel);font-family:var(--mono);font-size:12px;letter-spacing:.08em;padding:9px 14px;border-radius:7px;cursor:pointer;text-transform:uppercase}
+  .tabs button.active{background:var(--amber);color:#111}
+
+  section{display:none}
+  section.active{display:block}
+
+  h2{font-size:15px;font-weight:600;margin:28px 0 10px;color:var(--paper)}
+  h2:first-child{margin-top:0}
+  h3{font-size:13px;font-weight:600;margin:20px 0 8px;color:var(--amber);font-family:var(--mono);letter-spacing:.06em;text-transform:uppercase}
+  p{color:var(--steel);font-size:14px;margin:0 0 12px}
+  p b{color:var(--paper);font-weight:600}
+  code{font-family:var(--mono);background:var(--panel-2);color:var(--amber);padding:1px 6px;border-radius:4px;font-size:12.5px}
+  .k{color:var(--key)} .t{color:var(--teal)}
+
+  .flow{background:var(--panel);border:1px solid var(--line);border-radius:10px;padding:16px;font-family:var(--mono);font-size:12px;color:var(--steel);line-height:1.8;overflow-x:auto;margin:12px 0 18px}
+  .flow b{color:var(--amber)}
+
+  ul.steps{list-style:none;padding:0;margin:8px 0 18px;counter-reset:step}
+  ul.steps li{position:relative;padding:8px 0 8px 36px;font-size:13.5px;color:var(--steel);border-bottom:1px solid var(--line)}
+  ul.steps li:last-child{border:0}
+  ul.steps li::before{counter-increment:step;content:counter(step);position:absolute;left:0;top:10px;width:24px;height:24px;background:var(--panel-2);border:1px solid var(--line-2);border-radius:50%;text-align:center;line-height:22px;font-family:var(--mono);font-size:11px;color:var(--amber)}
+  ul.steps li b{color:var(--paper);font-weight:600}
+
+  pre{background:#0a0c11;border:1px solid var(--line-2);border-radius:9px;padding:14px 16px;overflow-x:auto;font-family:var(--mono);font-size:12.5px;line-height:1.6;color:var(--paper);margin:10px 0 18px}
+  pre .kw{color:var(--amber)}
+  pre .str{color:var(--teal)}
+  pre .cm{color:var(--steel-dim);font-style:italic}
+
+  .q-head{display:flex;align-items:baseline;gap:10px;margin:22px 0 6px}
+  .q-head h3{margin:0}
+  .q-head .meta{font-family:var(--mono);font-size:10px;color:var(--steel-dim);letter-spacing:.06em}
+
+  .note{background:var(--panel);border-left:3px solid var(--teal);padding:10px 14px;border-radius:0 7px 7px 0;color:var(--steel);font-size:13px;margin:12px 0 18px}
+  .note b{color:var(--paper)}
+
+  footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--steel-dim);font-size:11px;font-family:var(--mono);line-height:1.6}
+</style>
+</head>
+<body>
+
+<header class="top">
+  <div class="wrap">
+    <a href="index.html" class="back">← back to dashboard</a>
+    <div class="kicker">Amar Ujala · reader revenue · app</div>
+    <h1>How this dashboard works</h1>
+    <div class="tabs">
+      <button class="active" data-tab="logic">Logic</button>
+      <button data-tab="queries">Queries</button>
+    </div>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- ========== LOGIC ========== -->
+  <section class="active" id="logic">
+
+    <h2>Data flow</h2>
+    <div class="flow">
+<b>Pinot</b> (events + stories tables)<br>
+&nbsp;&nbsp;↓ GitHub Actions cron · 02:00 IST daily · pulls yesterday<br>
+<b>Python puller</b> (3 queries per day)<br>
+&nbsp;&nbsp;↓ joins + premium filter in pandas<br>
+<b>Google Sheet</b> (3 tabs: feed_metrics · paywall_metrics · stories_dim)<br>
+&nbsp;&nbsp;↓ "Publish to web" as CSV<br>
+<b>Dashboard</b> (static HTML, GitHub Pages) → filters client-side</div>
+
+    <h2>What the dashboard shows</h2>
+    <p>Daily funnel for hard-paywall premium stories pinned on the <code>foryou</code> homepage feed. Positions <code>5, 13, 21, 27, 28</code> across <b>4 feed versions</b>: v<b>2691</b> (~85%) pins the 4th premium story at position 27; versions <b>4810, 2694, 4809</b> (~5% each) pin it at position 28. Positions 5, 13, 21 are common to all.</p>
+
+    <h2>How each metric is attributed (strict filters)</h2>
+    <ul class="steps">
+      <li><b>Feed impression / click</b> — Pinot <code>events</code> table has flat columns for <code class="k">story_id</code>, <code class="k">feed_id</code>, <code class="k">feed_version_id</code>, <code class="k">feed_position</code>, <code class="k">screen_name</code>, <code class="k">platform</code>. Filters: <code>screen_name='foryou'</code>, <code>feed_id=1838</code>, position IN (5,13,21,27,28), <code class="t">LOWER(platform) IN ('android','ios')</code>. Unique users = <code>DISTINCTCOUNT(user_id)</code>.</li>
+      <li><b>Paywall funnel</b> — flat <code>story_id</code> is populated on PAYWALL_VIEW / PAYWALL_CLICK but <b>NULL</b> on VIEW_ITEM_LIST / BEGIN_CHECKOUT / BUYS. So we resolve story via <code>CASE WHEN story_id IS NOT NULL THEN story_id ELSE REGEXP_EXTRACT(acqSubSource, '[a-f0-9]{24}') END</code> — regex pulls the 24-char ObjectId from the pipe-separated <code>acqSubSource</code>. Additional strict filters:
+        <ul style="margin-top:6px;padding-left:18px;color:var(--steel-dim);font-size:13px;line-height:1.7">
+          <li><code class="t">acqSource = 'pay wall | premium'</code> (exact match — excludes e-paper paywall and non-premium)</li>
+          <li><code>screen_name = 'articleDetailScreenview'</code> for PAYWALL_VIEW / PAYWALL_CLICK</li>
+          <li><code>screen_name = 'subscriptionScreen'</code> for VIEW_ITEM_LIST / BEGIN_CHECKOUT / BUYS_PREMIUM_SUBSCRIPTION</li>
+          <li><code>LOWER(platform) IN ('android','ios')</code></li>
+        </ul>
+      </li>
+      <li><b>Premium story filter</b> — positions 5/13/21/27/28 contain personalized non-premium stories too. After fetching, we join <code>stories</code> table in pandas (Pinot join hits memory limit) and keep only <code>is_premium='true'</code>. Drops ~97% of feed rows as noise.</li>
+      <li><b>Story title + URL</b> — from <code>stories</code> table: <code class="t">title_hn</code> (Hindi), <code class="t">full_slug</code> → <code>https://www.amarujala.com/&lt;full_slug&gt;</code>, <code class="t">author_firstname_hn + author_lastname_hn</code>.</li>
+    </ul>
+
+    <h2>Daily refresh</h2>
+    <p>Cron runs at 20:30 UTC (02:00 IST next day). It pulls <b>yesterday-IST only</b> — current day is never fetched so numbers are never partial. Idempotent: re-running the same date replaces that date's rows.</p>
+
+    <h2>Why some numbers may look different from the Pinot console</h2>
+    <div class="note"><b>Premium filter</b>: console queries without <code>is_premium='true'</code> will show much larger numbers because they include personalized non-premium stories at those positions.<br><br><b>Paywall event split</b>: PAYWALL_VIEW total across your cluster includes <code>e_paper_rewarded_ad</code>, <code>e_paper_archive</code> events. We exclude those via <code>acqSource LIKE '%premium%'</code>.</div>
+
+  </section>
+
+  <!-- ========== QUERIES ========== -->
+  <section id="queries">
+
+    <p>All 3 queries run once per day. Reserved words (<code>date</code>, <code>hour</code>, <code>position</code>) are added/renamed in pandas after the query — never aliased in SQL.</p>
+
+    <div class="q-head"><h3>1 · Feed metrics</h3><span class="meta">per day · ~1-2s · 10-15k raw rows before premium filter</span></div>
+<pre><span class="kw">SELECT</span>
+  event_hour_ist,
+  feed_version_id,
+  feed_position,
+  story_id,
+  <span class="kw">DISTINCTCOUNT</span>(<span class="kw">CASE WHEN</span> event_type=<span class="str">'FEED_IMPRESSION'</span> <span class="kw">THEN</span> user_id <span class="kw">END</span>) <span class="kw">AS</span> fi_users,
+  <span class="kw">DISTINCTCOUNT</span>(<span class="kw">CASE WHEN</span> event_type=<span class="str">'FEED_CLICK'</span>      <span class="kw">THEN</span> user_id <span class="kw">END</span>) <span class="kw">AS</span> fc_users,
+  <span class="kw">COUNT</span>(<span class="kw">CASE WHEN</span> event_type=<span class="str">'FEED_IMPRESSION'</span> <span class="kw">THEN</span> <span class="str">1</span> <span class="kw">END</span>) <span class="kw">AS</span> fi_events,
+  <span class="kw">COUNT</span>(<span class="kw">CASE WHEN</span> event_type=<span class="str">'FEED_CLICK'</span>      <span class="kw">THEN</span> <span class="str">1</span> <span class="kw">END</span>) <span class="kw">AS</span> fc_events
+<span class="kw">FROM</span> events
+<span class="kw">WHERE</span> event_type <span class="kw">IN</span> (<span class="str">'FEED_IMPRESSION'</span>,<span class="str">'FEED_CLICK'</span>)
+  <span class="kw">AND</span> feed_id = <span class="str">1838</span>
+  <span class="kw">AND</span> feed_position <span class="kw">IN</span> (<span class="str">5,13,21,27,28</span>)
+  <span class="kw">AND</span> event_date_ist = <span class="str">'YYYY-MM-DD'</span>
+  <span class="kw">AND</span> screen_name = <span class="str">'foryou'</span>
+  <span class="kw">AND</span> <span class="kw">LOWER</span>(platform) <span class="kw">IN</span> (<span class="str">'android'</span>,<span class="str">'ios'</span>)
+  <span class="kw">AND</span> story_id <span class="kw">IS NOT NULL</span>
+  <span class="kw">AND</span> story_id != <span class="str">''</span>
+  <span class="kw">AND</span> story_id != <span class="str">'LOYALTY'</span>
+<span class="kw">GROUP BY</span> event_hour_ist, feed_version_id, feed_position, story_id
+<span class="kw">LIMIT</span> <span class="str">100000</span></pre>
+
+    <div class="q-head"><h3>2 · Paywall funnel metrics</h3><span class="meta">per day · ~2-3s · PV / PC / VIL / BC / BUYS unique users per (hour, story)</span></div>
+<pre><span class="kw">SELECT</span>
+  event_hour_ist,
+  <span class="cm">-- VIL / BC / BUYS have story_id NULL; fall back to regex on acqSubSource</span>
+  <span class="kw">CASE</span>
+    <span class="kw">WHEN</span> story_id <span class="kw">IS NOT NULL</span> <span class="kw">AND</span> story_id != <span class="str">''</span> <span class="kw">AND</span> story_id != <span class="str">'null'</span>
+      <span class="kw">THEN</span> story_id
+    <span class="kw">ELSE</span> REGEXP_EXTRACT(
+      JSON_EXTRACT_SCALAR(metadata, <span class="str">'$.acqSubSource'</span>, <span class="str">'STRING'</span>, <span class="str">''</span>),
+      <span class="str">'[a-f0-9]{24}'</span>
+    )
+  <span class="kw">END</span> <span class="kw">AS</span> resolved_story_id,
+  event_type,
+  <span class="kw">DISTINCTCOUNT</span>(user_id) <span class="kw">AS</span> unique_users
+<span class="kw">FROM</span> events
+<span class="kw">WHERE</span> event_date_ist = <span class="str">'YYYY-MM-DD'</span>
+  <span class="kw">AND</span> <span class="kw">LOWER</span>(platform) <span class="kw">IN</span> (<span class="str">'android'</span>,<span class="str">'ios'</span>)
+  <span class="cm">-- exact match — excludes e-paper paywall + non-premium entries</span>
+  <span class="kw">AND</span> JSON_EXTRACT_SCALAR(metadata, <span class="str">'$.acqSource'</span>, <span class="str">'STRING'</span>, <span class="str">''</span>) = <span class="str">'pay wall | premium'</span>
+  <span class="cm">-- canonical screen per event type</span>
+  <span class="kw">AND</span> (
+    (event_type <span class="kw">IN</span> (<span class="str">'PAYWALL_VIEW'</span>,<span class="str">'PAYWALL_CLICK'</span>)
+      <span class="kw">AND</span> screen_name = <span class="str">'articleDetailScreenview'</span>)
+    <span class="kw">OR</span>
+    (event_type <span class="kw">IN</span> (<span class="str">'VIEW_ITEM_LIST'</span>,<span class="str">'BEGIN_CHECKOUT'</span>,<span class="str">'BUYS_PREMIUM_SUBSCRIPTION'</span>)
+      <span class="kw">AND</span> screen_name = <span class="str">'subscriptionScreen'</span>)
+  )
+<span class="kw">GROUP BY</span> event_hour_ist, resolved_story_id, event_type
+<span class="kw">LIMIT</span> <span class="str">200000</span></pre>
+<p>Pandas pivots this long form into wide columns: <code>pv_users</code>, <code>pc_users</code>, <code>vil_users</code>, <code>bc_users</code>, <code>buys_users</code>.</p>
+
+    <div class="q-head"><h3>3 · Story dimension</h3><span class="meta">once per run (not per day) · batch IN clause</span></div>
+<pre><span class="kw">SELECT</span>
+  story_id, title_hn, title,
+  author_firstname_hn, author_lastname_hn,
+  category_title_hn, full_slug, is_premium
+<span class="kw">FROM</span> stories
+<span class="kw">WHERE</span> story_id <span class="kw">IN</span> (<span class="str">'&lt;id1&gt;'</span>, <span class="str">'&lt;id2&gt;'</span>, ...)
+<span class="kw">LIMIT</span> <span class="str">100000</span></pre>
+<p>In pandas: <code>author = firstname_hn + ' ' + lastname_hn</code>, <code>url = 'https://www.amarujala.com/' + full_slug</code>. Then premium filter drops ~1380 non-premium stories/day, keeping ~10 pinned premium stories.</p>
+
+    <h3>Post-processing in Python</h3>
+    <ul class="steps">
+      <li>Add <code>date</code> column + rename <code>event_hour_ist→hour</code>, <code>feed_position→position</code> (Pinot reserves <code>date</code>/<code>hour</code>/<code>position</code> as keywords — can't alias in SQL).</li>
+      <li>Join stories dim → filter to <code>is_premium='true'</code> only.</li>
+      <li>Write 3 tabs to Google Sheet via service account. Idempotent per date.</li>
+    </ul>
+
+  </section>
+
+  <footer>
+    Repo: github.com/770navyasharma/au-hard-paywall · Puller: <code>puller/hard_paywall_puller.py</code> · Cron: <code>.github/workflows/pull.yml</code> · Dashboard: <code>docs/index.html</code>
+  </footer>
+
+</div>
+
+<script>
+  document.querySelectorAll('.tabs button').forEach(b => {
+    b.addEventListener('click', () => {
+      document.querySelectorAll('.tabs button').forEach(x => x.classList.remove('active'));
+      document.querySelectorAll('section').forEach(x => x.classList.remove('active'));
+      b.classList.add('active');
+      document.getElementById(b.dataset.tab).classList.add('active');
+    });
+  });
+</script>
+</body>
+</html>

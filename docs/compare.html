@@ -1,0 +1,533 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AU · Hard Paywall — compare windows</title>
+<style>
+  :root{
+    --ink:#0d0f14; --panel:#14171f; --panel-2:#1b1f2a; --line:#262b38; --line-2:#333a4b;
+    --steel:#8a94a6; --steel-dim:#5b6474; --paper:#e8ebf2;
+    --amber:#f4b942; --amber-dim:#7a5f22; --teal:#3fb9a3; --danger:#ff5a52;
+    --green:#4ade80; --red:#f87171;
+    --mono: ui-monospace,"SF Mono","JetBrains Mono","Cascadia Mono",Menlo,Consolas,monospace;
+    --sans: system-ui,-apple-system,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;background:var(--ink);color:var(--paper);font-family:var(--sans);-webkit-font-smoothing:antialiased;line-height:1.5}
+  body{padding:0 0 80px}
+  .wrap{max-width:1400px;margin:0 auto;padding:0 22px}
+
+  header.top{border-bottom:1px solid var(--line);padding:22px 0 18px;margin-bottom:24px}
+  .kicker{font-family:var(--mono);font-size:11px;letter-spacing:.28em;text-transform:uppercase;color:var(--steel-dim)}
+  h1{font-size:24px;font-weight:650;letter-spacing:-.01em;margin:6px 0 4px}
+  .back{display:inline-block;font-family:var(--mono);font-size:12px;color:var(--teal);text-decoration:none;margin-bottom:6px}
+  .back:hover{color:var(--amber)}
+  .sub{color:var(--steel);font-size:13px;max-width:800px;line-height:1.5}
+
+  /* window editor */
+  .editor{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:18px;margin-bottom:20px}
+  .editor h3{font-family:var(--mono);font-size:10px;letter-spacing:.15em;text-transform:uppercase;color:var(--steel-dim);margin:0 0 12px}
+  .ed-row{display:grid;grid-template-columns:1.2fr .8fr .8fr 1.5fr auto;gap:10px;align-items:end}
+  @media (max-width:820px){ .ed-row{grid-template-columns:1fr 1fr} }
+  .ed-field label{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.1em;text-transform:uppercase;color:var(--steel-dim);margin-bottom:5px}
+  .ed-field input,.ed-field select{
+    width:100%;background:var(--panel-2);border:1px solid var(--line-2);color:var(--paper);
+    font-family:var(--sans);font-size:13px;padding:8px 10px;border-radius:7px;outline:none
+  }
+  .ed-field input:focus,.ed-field select:focus{border-color:var(--amber);box-shadow:0 0 0 2px rgba(244,185,66,.1)}
+  .addbtn{background:var(--teal);border:0;color:#04231d;font-weight:600;font-size:13px;padding:10px 18px;border-radius:7px;cursor:pointer;font-family:var(--sans);white-space:nowrap}
+  .addbtn:hover{filter:brightness(1.07)}
+
+  .baseline-toggle{display:flex;align-items:center;gap:8px;margin-top:14px;font-family:var(--mono);font-size:11px;color:var(--steel);letter-spacing:.05em}
+  .baseline-toggle input{width:16px;height:16px;accent-color:var(--teal);cursor:pointer}
+
+  /* window chips */
+  .windows{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:22px}
+  .chip{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--amber-dim);
+    border-radius:20px;padding:6px 10px 6px 14px;font-family:var(--mono);font-size:12px}
+  .chip .dot{width:8px;height:8px;border-radius:50%;background:var(--amber);flex-shrink:0}
+  .chip.baseline{border-color:var(--line-2)} .chip.baseline .dot{background:var(--steel)}
+  .chip .lbl{color:var(--paper)}
+  .chip .x{cursor:pointer;color:var(--steel-dim);font-size:16px;line-height:1;margin-left:4px;padding:0 4px;border-radius:3px}
+  .chip .x:hover{color:var(--danger);background:var(--line)}
+
+  /* chart + table */
+  .chartbox{background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:16px;margin-bottom:20px}
+  .chartbox h2{font-size:14px;font-weight:600;margin:0 0 12px;display:flex;align-items:center;gap:10px}
+  .chartbox h2 .note{font-family:var(--mono);font-size:10px;color:var(--steel-dim);font-weight:400;letter-spacing:.05em}
+  .chartbox canvas{max-height:320px}
+
+  table{width:100%;border-collapse:collapse;font-size:12.5px}
+  thead th{font-family:var(--mono);font-size:10px;letter-spacing:.09em;text-transform:uppercase;color:var(--steel-dim);
+    text-align:right;padding:12px 14px;border-bottom:1px solid var(--line);font-weight:500;white-space:nowrap}
+  thead th:first-child{text-align:left}
+  tbody td{padding:10px 14px;border-bottom:1px solid var(--line);vertical-align:middle;text-align:right;font-family:var(--mono);font-variant-numeric:tabular-nums}
+  tbody td:first-child{text-align:left;font-family:var(--sans);color:var(--paper)}
+  tbody tr:hover{background:var(--panel-2)}
+  tbody tr.sep td{border-top:2px solid var(--line-2);padding-top:14px}
+  .delta{font-family:var(--mono);font-size:11px;margin-left:6px}
+  .delta.up{color:var(--green)} .delta.down{color:var(--red)} .delta.flat{color:var(--steel-dim)}
+  .metric-group{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--amber)}
+
+  .empty{padding:60px 16px;text-align:center;color:var(--steel-dim);font-size:13px;border:1px dashed var(--line-2);border-radius:12px}
+  .pill{display:inline-block;font-family:var(--mono);font-size:10px;padding:2px 7px;border-radius:10px;background:var(--panel);border:1px solid var(--line-2);color:var(--teal);margin-left:6px}
+
+  .loading{position:fixed;inset:0;background:rgba(13,15,20,.9);display:flex;align-items:center;justify-content:center;z-index:100;font-family:var(--mono);color:var(--amber);font-size:14px}
+  .loading.hide{display:none}
+
+  footer{margin-top:40px;padding-top:16px;border-top:1px solid var(--line);color:var(--steel-dim);font-size:11px;font-family:var(--mono);line-height:1.6}
+</style>
+</head>
+<body>
+
+<div class="loading" id="loading">Loading data from Google Sheet …</div>
+
+<header class="top">
+  <div class="wrap">
+    <a href="index.html" class="back">← back to dashboard</a>
+    <div class="kicker">Amar Ujala · reader revenue · app</div>
+    <h1>Compare windows <span id="dataPill" class="pill">loading…</span></h1>
+    <p class="sub">Pick date + hour ranges. Each window shows aggregated funnel metrics. Toggle <b>baseline</b> to auto-add the "rest of that day" for each selected window — useful for A/B comparing a headline-change window against the unchanged hours.</p>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <!-- WINDOW EDITOR -->
+  <section class="editor">
+    <h3>Add a window</h3>
+    <div class="ed-row">
+      <div class="ed-field">
+        <label>Date</label>
+        <input type="date" id="winDate">
+      </div>
+      <div class="ed-field">
+        <label>From hour</label>
+        <select id="winFrom"></select>
+      </div>
+      <div class="ed-field">
+        <label>To hour</label>
+        <select id="winTo"></select>
+      </div>
+      <div class="ed-field">
+        <label>Label (optional)</label>
+        <input type="text" id="winLabel" placeholder="e.g. new headline live">
+      </div>
+      <button class="addbtn" id="addWin">+ Add window</button>
+    </div>
+    <label class="baseline-toggle">
+      <input type="checkbox" id="baselineChk" checked>
+      Include baseline (rest of day) for each window — compare against unselected hours
+    </label>
+  </section>
+
+  <!-- WINDOW CHIPS -->
+  <div class="windows" id="winList"></div>
+
+  <!-- RESULTS -->
+  <div id="results" class="empty">Add at least one window to see metrics + comparison.</div>
+
+  <div id="hasResults" style="display:none">
+
+    <!-- CHART -->
+    <div class="chartbox">
+      <h2>CTR &amp; conversion comparison <span class="note">grouped bars · one group per metric</span></h2>
+      <canvas id="ctrChart"></canvas>
+    </div>
+
+    <!-- TABLE -->
+    <div class="chartbox">
+      <h2>Full metrics table <span class="note">δ shown as % change from first window</span></h2>
+      <div style="overflow-x:auto">
+        <table id="cmpTable">
+          <thead><tr id="cmpHead"></tr></thead>
+          <tbody id="cmpBody"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- FUNNEL CHART -->
+    <div class="chartbox">
+      <h2>Funnel (unique users) <span class="note">per window</span></h2>
+      <canvas id="funnelChart"></canvas>
+    </div>
+
+  </div>
+
+  <footer>
+    Same CSV data as the main dashboard · all computations happen in your browser · <a href="logic.html" style="color:var(--teal);text-decoration:none">how it works →</a>
+  </footer>
+</div>
+
+<!-- external deps (allowed hosts only) -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/PapaParse/5.4.1/papaparse.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
+
+<script>
+/* =========================================================================
+   CONFIG — SAME 3 CSV URLs as index.html
+   ========================================================================= */
+const CSV_URLS = {
+  feed:    'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=1037533346&single=true&output=csv',
+  paywall: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=822394355&single=true&output=csv',
+  dim:     'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=286162334&single=true&output=csv',
+};
+
+const METRICS = [
+  // group, key, label, kind (num|pct), derived={num,den}
+  ['COUNTS',       'fi_users',    'Feed Impressions (users)',   'num', null],
+  ['COUNTS',       'fc_users',    'Feed Clicks (users)',        'num', null],
+  ['COUNTS',       'pv_users',    'Paywall Views (users)',      'num', null],
+  ['COUNTS',       'pc_users',    'Paywall Clicks (users)',     'num', null],
+  ['COUNTS',       'vil_users',   'Plan Page Views (users)',    'num', null],
+  ['COUNTS',       'bc_users',    'Begin Checkout (users)',     'num', null],
+  ['COUNTS',       'buys_users',  'Purchases (users)',          'num', null],
+  ['CTRs & CONVERSIONS', 'feed_ctr',    'Feed CTR',                   'pct', {num:'fc_users', den:'fi_users'}],
+  ['CTRs & CONVERSIONS', 'paywall_ctr', 'Paywall CTR',                'pct', {num:'pc_users', den:'pv_users'}],
+  ['CTRs & CONVERSIONS', 'pv_to_vil',   'PV → Plan Page %',           'pct', {num:'vil_users', den:'pv_users'}],
+  ['CTRs & CONVERSIONS', 'vil_to_bc',   'Plan → Checkout %',          'pct', {num:'bc_users', den:'vil_users'}],
+  ['CTRs & CONVERSIONS', 'pv_to_buys',  'PV → Purchase %',            'pct', {num:'buys_users', den:'pv_users'}],
+  ['CTRs & CONVERSIONS', 'fi_to_buys',  'Feed Imp → Purchase %',      'pct', {num:'buys_users', den:'fi_users'}],
+];
+
+const CHART_METRICS = ['feed_ctr','paywall_ctr','pv_to_vil','vil_to_bc','pv_to_buys']; // which to put in the main CTR chart
+
+// Color palette for windows (cycled)
+const WIN_COLORS = ['#f4b942','#3fb9a3','#a78bfa','#f472b6','#60a5fa','#fb923c'];
+const BASE_COLOR = '#8a94a6';
+
+/* =========================================================================
+   State
+   ========================================================================= */
+const STATE = {
+  feed: [], paywall: [], dim: {},
+  joined: [],         // one row per (date, hour, position, version, story_id) with all metrics
+  windows: [],        // array of {id, date, from, to, label}
+  baselines: true,
+};
+
+/* =========================================================================
+   Boot
+   ========================================================================= */
+(async function boot(){
+  try {
+    await loadAll();
+    buildJoined();
+    initEditor();
+    document.getElementById('loading').classList.add('hide');
+  } catch (e) {
+    document.getElementById('loading').innerHTML =
+      '<div style="text-align:center"><div style="color:var(--danger);margin-bottom:10px">Failed to load</div>' +
+      '<div style="font-size:12px;color:var(--steel)">'+escapeHtml(String(e))+'</div></div>';
+  }
+})();
+
+async function loadAll(){
+  const [feedCsv, pwCsv, dimCsv] = await Promise.all([
+    fetchCsv(CSV_URLS.feed), fetchCsv(CSV_URLS.paywall), fetchCsv(CSV_URLS.dim)
+  ]);
+  STATE.feed    = normFeed(feedCsv);
+  STATE.paywall = normPaywall(pwCsv);
+  STATE.dim     = indexBy(normDim(dimCsv), 'story_id');
+  document.getElementById('dataPill').textContent =
+    `${STATE.feed.length} feed · ${STATE.paywall.length} paywall · ${Object.keys(STATE.dim).length} stories`;
+}
+
+async function fetchCsv(url){
+  const r = await fetch(url, {cache:'no-store'});
+  if (!r.ok) throw new Error('fetch '+r.status);
+  const text = await r.text();
+  return new Promise((res,rej)=>Papa.parse(text,{header:true,skipEmptyLines:true,complete:(o)=>res(o.data),error:rej}));
+}
+
+function normFeed(rows){
+  return rows.map(r=>({
+    date:r.date, hour:pad2(r.hour), hr:+r.hour,
+    feed_version_id:+r.feed_version_id||0, position:+r.position||0,
+    story_id:(r.story_id||'').trim(),
+    fi_users:+r.fi_users||0, fc_users:+r.fc_users||0,
+    fi_events:+r.fi_events||0, fc_events:+r.fc_events||0,
+  })).filter(r=>r.story_id && r.story_id!=='LOYALTY');
+}
+function normPaywall(rows){
+  return rows.map(r=>({
+    date:r.date, hour:pad2(r.hour), hr:+r.hour, story_id:(r.story_id||'').trim(),
+    pv_users:+r.pv_users||0, pc_users:+r.pc_users||0,
+    vil_users:+r.vil_users||0, bc_users:+r.bc_users||0, buys_users:+r.buys_users||0,
+  })).filter(r=>r.story_id);
+}
+function normDim(rows){
+  return rows.map(r=>({
+    story_id:(r.story_id||'').trim(),
+    title_hn:r.title_hn||'', author:r.author||'', url:r.url||'', is_premium:r.is_premium||''
+  })).filter(r=>r.story_id);
+}
+function indexBy(arr,key){const o={};arr.forEach(x=>o[x[key]]=x);return o;}
+function pad2(x){x=String(x||'').trim();return x.length===1?'0'+x:x;}
+
+/* =========================================================================
+   Build joined — same logic as main dashboard
+   ========================================================================= */
+function buildJoined(){
+  const pwIx = {};
+  STATE.paywall.forEach(r => { pwIx[`${r.date}|${r.hour}|${r.story_id}`] = r; });
+  const def = {pv_users:0,pc_users:0,vil_users:0,bc_users:0,buys_users:0};
+  STATE.joined = STATE.feed.map(f => ({
+    ...f, ...(pwIx[`${f.date}|${f.hour}|${f.story_id}`] || def),
+  }));
+}
+
+/* =========================================================================
+   Editor
+   ========================================================================= */
+function initEditor(){
+  const dates = [...new Set(STATE.joined.map(r=>r.date))].sort();
+  const dateIn = document.getElementById('winDate');
+  if (dates.length){
+    dateIn.min = dates[0]; dateIn.max = dates[dates.length-1];
+    dateIn.value = dates[dates.length-1];
+  }
+  const fromSel = document.getElementById('winFrom');
+  const toSel   = document.getElementById('winTo');
+  for (let i=0;i<24;i++){
+    fromSel.appendChild(new Option(pad2(i)+':00', i));
+    toSel.appendChild(new Option(pad2(i)+':59', i));
+  }
+  fromSel.value = 0; toSel.value = 23;
+
+  document.getElementById('addWin').addEventListener('click', addWindow);
+  document.getElementById('baselineChk').addEventListener('change', e=>{
+    STATE.baselines = e.target.checked;
+    renderAll();
+  });
+}
+
+function addWindow(){
+  const date = document.getElementById('winDate').value;
+  const from = +document.getElementById('winFrom').value;
+  const to   = +document.getElementById('winTo').value;
+  const label= document.getElementById('winLabel').value.trim();
+  if (!date){ alert('Pick a date'); return; }
+  if (to < from){ alert('From-hour must be ≤ to-hour'); return; }
+  STATE.windows.push({
+    id: 'w' + Date.now() + Math.floor(Math.random()*1000),
+    date, from, to, label
+  });
+  document.getElementById('winLabel').value = '';
+  renderAll();
+}
+
+function removeWindow(id){
+  STATE.windows = STATE.windows.filter(w => w.id !== id);
+  renderAll();
+}
+
+function winLabel(w){
+  const d = new Date(w.date+'T00:00').toLocaleDateString('en-IN', {day:'numeric',month:'short'});
+  const base = w.label ? w.label + ' · ' : '';
+  return `${base}${d} ${pad2(w.from)}–${pad2(w.to)}h`;
+}
+function baseLabel(w){
+  const d = new Date(w.date+'T00:00').toLocaleDateString('en-IN', {day:'numeric',month:'short'});
+  return `baseline · ${d} rest of day`;
+}
+
+/* =========================================================================
+   Aggregation per window — with paywall dedupe on (date,hour,story_id)
+   ========================================================================= */
+function aggregateWindow(filter){
+  const agg = {fi_users:0,fc_users:0,fi_events:0,fc_events:0,
+               pv_users:0,pc_users:0,vil_users:0,bc_users:0,buys_users:0};
+  const seen = new Set();
+  STATE.joined.forEach(r => {
+    if (!filter(r)) return;
+    agg.fi_users += r.fi_users; agg.fc_users += r.fc_users;
+    agg.fi_events += r.fi_events; agg.fc_events += r.fc_events;
+    const pwKey = `${r.date}|${r.hour}|${r.story_id}`;
+    if (!seen.has(pwKey)){
+      seen.add(pwKey);
+      agg.pv_users += r.pv_users; agg.pc_users += r.pc_users;
+      agg.vil_users += r.vil_users; agg.bc_users += r.bc_users;
+      agg.buys_users += r.buys_users;
+    }
+  });
+  // derived
+  agg.feed_ctr    = agg.fi_users ? agg.fc_users/agg.fi_users : 0;
+  agg.paywall_ctr = agg.pv_users ? agg.pc_users/agg.pv_users : 0;
+  agg.pv_to_vil   = agg.pv_users ? agg.vil_users/agg.pv_users : 0;
+  agg.vil_to_bc   = agg.vil_users ? agg.bc_users/agg.vil_users : 0;
+  agg.pv_to_buys  = agg.pv_users ? agg.buys_users/agg.pv_users : 0;
+  agg.fi_to_buys  = agg.fi_users ? agg.buys_users/agg.fi_users : 0;
+  return agg;
+}
+
+function windowFilter(w){
+  return r => r.date === w.date && r.hr >= w.from && r.hr <= w.to;
+}
+function baselineFilter(w){
+  return r => r.date === w.date && (r.hr < w.from || r.hr > w.to);
+}
+
+/* =========================================================================
+   Render everything
+   ========================================================================= */
+function renderAll(){
+  renderChips();
+  if (!STATE.windows.length){
+    document.getElementById('results').style.display = 'block';
+    document.getElementById('hasResults').style.display = 'none';
+    return;
+  }
+  document.getElementById('results').style.display = 'none';
+  document.getElementById('hasResults').style.display = 'block';
+
+  // Build the list of series: each window, optionally followed by its baseline
+  const series = [];
+  STATE.windows.forEach((w, i) => {
+    series.push({
+      key: w.id, label: winLabel(w), color: WIN_COLORS[i % WIN_COLORS.length],
+      isBaseline: false, agg: aggregateWindow(windowFilter(w))
+    });
+    if (STATE.baselines){
+      series.push({
+        key: w.id+'_base', label: baseLabel(w), color: BASE_COLOR,
+        isBaseline: true, agg: aggregateWindow(baselineFilter(w))
+      });
+    }
+  });
+
+  renderCtrChart(series);
+  renderTable(series);
+  renderFunnelChart(series);
+}
+
+function renderChips(){
+  const el = document.getElementById('winList');
+  if (!STATE.windows.length){ el.innerHTML = ''; return; }
+  el.innerHTML = STATE.windows.map((w, i) => `
+    <div class="chip" style="border-color:${WIN_COLORS[i % WIN_COLORS.length]}">
+      <span class="dot" style="background:${WIN_COLORS[i % WIN_COLORS.length]}"></span>
+      <span class="lbl">${escapeHtml(winLabel(w))}</span>
+      <span class="x" data-rm="${w.id}" title="remove">×</span>
+    </div>
+  `).join('');
+  el.querySelectorAll('[data-rm]').forEach(x =>
+    x.addEventListener('click', ()=>removeWindow(x.dataset.rm))
+  );
+}
+
+let _ctrChart = null;
+function renderCtrChart(series){
+  const labels = CHART_METRICS.map(k => METRICS.find(m => m[1]===k)[2]);
+  const datasets = series.map(s => ({
+    label: s.label,
+    data: CHART_METRICS.map(k => (s.agg[k]||0) * 100),
+    backgroundColor: s.color,
+    borderColor: s.color,
+    borderWidth: s.isBaseline ? 1 : 0,
+    borderDash: s.isBaseline ? [4,3] : [],
+    borderRadius: 4,
+  }));
+  if (_ctrChart) _ctrChart.destroy();
+  _ctrChart = new Chart(document.getElementById('ctrChart').getContext('2d'), {
+    type:'bar',
+    data:{labels, datasets},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{labels:{color:'#e8ebf2',font:{family:'ui-monospace',size:11}}},
+        tooltip:{callbacks:{label:(c)=>c.dataset.label+': '+c.parsed.y.toFixed(2)+'%'}}
+      },
+      scales:{
+        x:{ticks:{color:'#8a94a6',font:{family:'ui-monospace',size:11}},grid:{color:'#262b38'}},
+        y:{ticks:{color:'#8a94a6',font:{family:'ui-monospace',size:11},callback:v=>v+'%'},
+            grid:{color:'#262b38'}, beginAtZero:true}
+      }
+    }
+  });
+}
+
+function renderTable(series){
+  const head = document.getElementById('cmpHead');
+  const body = document.getElementById('cmpBody');
+  head.innerHTML = `<th>Metric</th>` + series.map(s =>
+    `<th style="color:${s.color}">${escapeHtml(s.label)}</th>`
+  ).join('');
+
+  let html = '';
+  let lastGroup = '';
+  METRICS.forEach(m => {
+    const [group, key, label, kind] = m;
+    const sep = group !== lastGroup;
+    lastGroup = group;
+    if (sep){
+      html += `<tr class="sep"><td colspan="${series.length+1}" class="metric-group">${group}</td></tr>`;
+    }
+    const base = series[0]?.agg[key] || 0;
+    const cells = series.map((s, idx) => {
+      const v = s.agg[key] || 0;
+      let cell = kind==='pct' ? pct(v) : fmt(v);
+      if (idx > 0 && base){
+        const d = (v - base) / base;
+        const dir = Math.abs(d) < 0.005 ? 'flat' : (d>0 ? 'up' : 'down');
+        const sign = d>0 ? '+' : '';
+        cell += `<span class="delta ${dir}">${sign}${(d*100).toFixed(1)}%</span>`;
+      }
+      return `<td>${cell}</td>`;
+    });
+    html += `<tr><td>${escapeHtml(label)}</td>${cells.join('')}</tr>`;
+  });
+  body.innerHTML = html;
+}
+
+let _funnelChart = null;
+function renderFunnelChart(series){
+  const stages = ['fi_users','fc_users','pv_users','pc_users','vil_users','bc_users','buys_users'];
+  const labels = ['Feed imp.','Feed click','Paywall view','Paywall click','Plan page','Begin checkout','Purchase'];
+  const datasets = series.map(s => ({
+    label: s.label,
+    data: stages.map(k => s.agg[k]||0),
+    backgroundColor: s.color, borderColor: s.color,
+    borderWidth: s.isBaseline ? 1 : 0,
+    borderDash: s.isBaseline ? [4,3] : [],
+    borderRadius: 4,
+  }));
+  if (_funnelChart) _funnelChart.destroy();
+  _funnelChart = new Chart(document.getElementById('funnelChart').getContext('2d'), {
+    type:'bar',
+    data:{labels, datasets},
+    options:{
+      responsive:true, maintainAspectRatio:false,
+      plugins:{
+        legend:{labels:{color:'#e8ebf2',font:{family:'ui-monospace',size:11}}},
+        tooltip:{callbacks:{label:(c)=>c.dataset.label+': '+fmt(c.parsed.y)+' users'}}
+      },
+      scales:{
+        x:{ticks:{color:'#8a94a6',font:{family:'ui-monospace',size:11}},grid:{color:'#262b38'}},
+        y:{ticks:{color:'#8a94a6',font:{family:'ui-monospace',size:11},
+                  callback:v=>v>=1000?(v/1000).toFixed(v>=10000?0:1)+'k':v},
+            grid:{color:'#262b38'}, beginAtZero:true}
+      }
+    }
+  });
+}
+
+/* =========================================================================
+   Utils
+   ========================================================================= */
+function fmt(n){
+  if (n==null||isNaN(n)) return '0';
+  if (Math.abs(n) >= 1000) return n.toLocaleString('en-IN');
+  return String(n);
+}
+function pct(x){
+  if (x==null||isNaN(x)) return '—';
+  return (x*100).toFixed(2)+'%';
+}
+function escapeHtml(s){
+  return String(s==null?'':s).replace(/[&<>"]/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m]));
+}
+</script>
+</body>
+</html>

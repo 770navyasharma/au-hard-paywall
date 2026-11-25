@@ -119,7 +119,7 @@
 <header class="top">
   <div class="wrap">
     <div class="kicker">Amar Ujala · reader revenue · app</div>
-    <h1>Hard Paywall Performance <span id="statusPill" class="pill">loading…</span> <a href="logic.html" class="pill" style="color:var(--teal);text-decoration:none;border-color:var(--teal);cursor:pointer">How it works →</a></h1>
+    <h1>Hard Paywall Performance <span id="statusPill" class="pill">loading…</span> <a href="compare.html" class="pill" style="color:var(--amber);text-decoration:none;border-color:var(--amber);cursor:pointer">Compare →</a> <a href="logic.html" class="pill" style="color:var(--teal);text-decoration:none;border-color:var(--teal);cursor:pointer">How it works →</a></h1>
     <p class="sub">Position-wise funnel for premium stories pinned on <b>foryou</b> feed (positions 5, 13, 21, 27, 28 across 4 feed versions). Feed metrics are attributed by <span class="mono" style="color:var(--amber)">story_id × position × version × hour</span>. Paywall funnel (PV→BUYS) is attributed by <span class="mono" style="color:var(--teal)">story_id × hour</span> — same counts repeat across positions for the same story-hour.</p>
   </div>
 </header>
@@ -225,9 +225,9 @@
    File → Share → Publish to web → pick tab → CSV → copy URL.
    ========================================================================= */
 const CSV_URLS = {
-  feed:    'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=1037533346&single=true&output=csv',
-  paywall: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=822394355&single=true&output=csv',
-  dim:     'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=286162334&single=true&output=csv',
+  feed:    'PASTE_FEED_METRICS_CSV_URL_HERE',
+  paywall: 'PASTE_PAYWALL_METRICS_CSV_URL_HERE',
+  dim:     'PASTE_STORIES_DIM_CSV_URL_HERE',
 };
 
 /* =========================================================================
