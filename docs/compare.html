@@ -241,21 +241,35 @@ async function fetchCsv(url){
   return new Promise((res,rej)=>Papa.parse(text,{header:true,skipEmptyLines:true,complete:(o)=>res(o.data),error:rej}));
 }
 
+/* Robust hour parser — handles "16", "16:00", "16:00:00", " 16 ", etc. */
+function parseHour(x){
+  if (x == null) return NaN;
+  const m = String(x).trim().match(/^(\d{1,2})/);
+  return m ? +m[1] : NaN;
+}
 function normFeed(rows){
-  return rows.map(r=>({
-    date:r.date, hour:pad2(r.hour), hr:+r.hour,
-    feed_version_id:+r.feed_version_id||0, position:+r.position||0,
-    story_id:(r.story_id||'').trim(),
-    fi_users:+r.fi_users||0, fc_users:+r.fc_users||0,
-    fi_events:+r.fi_events||0, fc_events:+r.fc_events||0,
-  })).filter(r=>r.story_id && r.story_id!=='LOYALTY');
+  return rows.map(r=>{
+    const hr = parseHour(r.hour);
+    return {
+      date: String(r.date||'').trim(),
+      hour: pad2(hr), hr: hr,
+      feed_version_id:+r.feed_version_id||0, position:+r.position||0,
+      story_id:(r.story_id||'').trim(),
+      fi_users:+r.fi_users||0, fc_users:+r.fc_users||0,
+      fi_events:+r.fi_events||0, fc_events:+r.fc_events||0,
+    };
+  }).filter(r=>r.story_id && r.story_id!=='LOYALTY' && !isNaN(r.hr));
 }
 function normPaywall(rows){
-  return rows.map(r=>({
-    date:r.date, hour:pad2(r.hour), hr:+r.hour, story_id:(r.story_id||'').trim(),
-    pv_users:+r.pv_users||0, pc_users:+r.pc_users||0,
-    vil_users:+r.vil_users||0, bc_users:+r.bc_users||0, buys_users:+r.buys_users||0,
-  })).filter(r=>r.story_id);
+  return rows.map(r=>{
+    const hr = parseHour(r.hour);
+    return {
+      date: String(r.date||'').trim(),
+      hour: pad2(hr), hr: hr, story_id:(r.story_id||'').trim(),
+      pv_users:+r.pv_users||0, pc_users:+r.pc_users||0,
+      vil_users:+r.vil_users||0, bc_users:+r.bc_users||0, buys_users:+r.buys_users||0,
+    };
+  }).filter(r=>r.story_id && !isNaN(r.hr));
 }
 function normDim(rows){
   return rows.map(r=>({
@@ -264,7 +278,11 @@ function normDim(rows){
   })).filter(r=>r.story_id);
 }
 function indexBy(arr,key){const o={};arr.forEach(x=>o[x[key]]=x);return o;}
-function pad2(x){x=String(x||'').trim();return x.length===1?'0'+x:x;}
+function pad2(x){
+  if (x==null || (typeof x==='number' && isNaN(x))) return '00';
+  const s = String(x).trim();
+  return s.length===1 ? '0'+s : s;
+}
 
 /* =========================================================================
    Build joined — same logic as main dashboard
