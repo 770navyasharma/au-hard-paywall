@@ -121,14 +121,22 @@ def pull_feed_metrics(date_str: str) -> pd.DataFrame:
     return df
 
 
-def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame:
+def pull_paywall_events_day(date_str: str, keep_story_ids: set) -> pd.DataFrame:
     """
-    ONE query per day. Resolves story_id for each event:
-      - PAYWALL_VIEW / PAYWALL_CLICK: events.story_id flat column (populated)
-      - VIEW_ITEM_LIST / BEGIN_CHECKOUT / BUYS: story_id is NULL on these events,
-        so we extract the 24-char ObjectId from metadata.acqSubSource via regex.
-    Pre-filtered to premium paywall events only via acqSource='pay wall | premium'
-    (excludes e-paper paywall).
+    Fetch RAW paywall events (one row per user action) — NOT pre-aggregated.
+
+    Why raw: DISTINCTCOUNT per hour/day bucket can't be summed across buckets.
+    A user who views a paywall at 10am and 3pm = 1 in each bucket, SUM = 2,
+    but true unique = 1. GA counts true unique (27,624 PV in Nov) while our
+    old bucket-sum approach inflated this to ~100,000.
+
+    By storing raw events (date, hour, story, event_type, user_id), the
+    dashboard can compute true unique users for ANY filter window via Set
+    dedup on user_id.
+
+    Dedup within identical (date, hour, story, event_type, user_id) tuples
+    in Python to keep the sheet compact — same user firing same event at
+    same hour on same story doesn't need multiple rows.
     """
     sql = f"""
     SELECT
@@ -139,7 +147,7 @@ def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame
         ELSE REGEXP_EXTRACT(JSON_EXTRACT_SCALAR(metadata, '$.acqSubSource', 'STRING', ''), '[a-f0-9]{{24}}')
       END AS resolved_story_id,
       event_type,
-      DISTINCTCOUNT(user_id) AS unique_users
+      user_id
     FROM events
     WHERE event_date_ist = '{date_str}'
       AND LOWER(platform) IN ('android','ios')
@@ -151,51 +159,27 @@ def pull_paywall_metrics_day(date_str: str, keep_story_ids: set) -> pd.DataFrame
         (event_type IN ('VIEW_ITEM_LIST','BEGIN_CHECKOUT','BUYS_PREMIUM_SUBSCRIPTION')
           AND screen_name = 'subscriptionScreen')
       )
-    GROUP BY SUBSTR(event_time_ist, 1, 2),
-      CASE
-        WHEN story_id IS NOT NULL AND story_id != '' AND story_id != 'null'
-          THEN story_id
-        ELSE REGEXP_EXTRACT(JSON_EXTRACT_SCALAR(metadata, '$.acqSubSource', 'STRING', ''), '[a-f0-9]{{24}}')
-      END,
-      event_type
-    LIMIT 200000
+      AND user_id IS NOT NULL AND user_id != ''
+    LIMIT 1000000
     """
     df = pinot_query(sql)
     if df.empty:
-        return pd.DataFrame(columns=["date","hour","story_id","pv_users","pc_users","vil_users","bc_users","buys_users"])
+        return pd.DataFrame(columns=["date","hour","story_id","event_type","user_id"])
 
-    # add date column + rename to canonical names
     df["date"] = date_str
     df = df.rename(columns={"hour_ist": "hour", "resolved_story_id": "story_id"})
     df["hour"] = df["hour"].astype(str).str.strip().str.zfill(2)
-    # drop rows where neither flat story_id nor regex extraction found a story
-    df = df[df["story_id"].astype(str).str.strip() != ""]
-    df = df[df["story_id"].astype(str).str.strip() != "null"]
+    df["user_id"] = df["user_id"].astype(str).str.strip()
+    df["story_id"] = df["story_id"].astype(str).str.strip()
+    df["event_type"] = df["event_type"].astype(str).str.strip()
+    df = df[df["story_id"] != ""]
+    df = df[df["story_id"] != "null"]
+    df = df[df["user_id"] != ""]
     if keep_story_ids:
-        df = df[df["story_id"].astype(str).isin(keep_story_ids)]
-    if df.empty:
-        return pd.DataFrame(columns=["date","hour","story_id","pv_users","pc_users","vil_users","bc_users","buys_users"])
-
-    wide = df.pivot_table(
-        index=["date","hour","story_id"],
-        columns="event_type",
-        values="unique_users",
-        fill_value=0,
-    ).reset_index()
-    wide.columns.name = None
-    rename_map = {
-        "PAYWALL_VIEW":"pv_users",
-        "PAYWALL_CLICK":"pc_users",
-        "VIEW_ITEM_LIST":"vil_users",
-        "BEGIN_CHECKOUT":"bc_users",
-        "BUYS_PREMIUM_SUBSCRIPTION":"buys_users",
-    }
-    for src, dst in rename_map.items():
-        if src in wide.columns: wide = wide.rename(columns={src:dst})
-        else: wide[dst] = 0
-    for c in ["pv_users","pc_users","vil_users","bc_users","buys_users"]:
-        wide[c] = pd.to_numeric(wide[c], errors="coerce").fillna(0).astype(int)
-    return wide[["date","hour","story_id","pv_users","pc_users","vil_users","bc_users","buys_users"]]
+        df = df[df["story_id"].isin(keep_story_ids)]
+    # dedupe at event-grain — same user+event+story+hour = single row
+    df = df.drop_duplicates(subset=["date","hour","story_id","event_type","user_id"])
+    return df[["date","hour","story_id","event_type","user_id"]]
 
 
 def pull_stories_batch(story_ids: List[str]) -> pd.DataFrame:
@@ -259,6 +243,18 @@ def upsert_dated_bulk(tab: str, new_df: pd.DataFrame, cols: List[str], dates_tou
     if not existing.empty and "date" in existing.columns and dates_touched:
         existing = existing[~existing["date"].astype(str).isin({str(d) for d in dates_touched})]
 
+    # Safety: if the sheet still has the OLD hourly paywall schema (with a
+    # 'hour' column) and we're writing DAY-level now (no 'hour' in cols),
+    # collapse hourly rows to one per (date, story_id) by summing. Prevents
+    # duplicate (date, story_id) rows that would break the dashboard join.
+    if (not existing.empty and "hour" in existing.columns and "hour" not in cols
+            and "story_id" in existing.columns and "date" in existing.columns):
+        num_cols = [c for c in cols if c not in ("date", "story_id")]
+        for c in num_cols:
+            if c in existing.columns:
+                existing[c] = pd.to_numeric(existing[c], errors="coerce").fillna(0).astype(int)
+        existing = existing.groupby(["date","story_id"], as_index=False)[num_cols].sum()
+
     combined = pd.concat(
         [existing[cols] if not existing.empty else pd.DataFrame(columns=cols),
          new_df[cols] if not new_df.empty else pd.DataFrame(columns=cols)],
@@ -300,7 +296,7 @@ def _write(ws, df: pd.DataFrame, cols: List[str]):
 
 # ---------- orchestration ----------
 FEED_COLS = ["date","hour","feed_version_id","position","story_id","fi_users","fc_users","fi_events","fc_events"]
-PW_COLS   = ["date","hour","story_id","pv_users","pc_users","vil_users","bc_users","buys_users"]
+PW_COLS   = ["date","hour","story_id","event_type","user_id"]  # raw events — dedup at dashboard
 DIM_COLS  = ["story_id","title_hn","title_en","author","category_hn","url","is_premium"]
 
 
@@ -346,12 +342,12 @@ def main():
             all_story_ids |= day_stories
             log(f"[{date_str}] feed rows: {len(feed_df)} / unique stories this day: {len(day_stories)}")
 
-            log(f"[{date_str}] fetching paywall metrics (single query) ...")
+            log(f"[{date_str}] fetching paywall RAW events (single query) ...")
             try:
-                pw_df = pull_paywall_metrics_day(date_str, day_stories)
+                pw_df = pull_paywall_events_day(date_str, day_stories)
                 if not pw_df.empty:
                     pw_frames.append(pw_df)
-                log(f"[{date_str}] paywall rows kept: {len(pw_df)}")
+                log(f"[{date_str}] paywall raw event rows kept: {len(pw_df)}")
             except Exception as e:
                 log(f"[{date_str}] paywall query failed: {e}")
         else:
@@ -383,7 +379,7 @@ def main():
 
     log("\nwriting to Google Sheet ...")
     upsert_dated_bulk("feed_metrics",    feed_all.reindex(columns=FEED_COLS), FEED_COLS, dates_touched)
-    upsert_dated_bulk("paywall_metrics", pw_all.reindex(columns=PW_COLS),     PW_COLS,   dates_touched)
+    upsert_dated_bulk("paywall_events",  pw_all.reindex(columns=PW_COLS),     PW_COLS,   dates_touched)
     upsert_dim_bulk("stories_dim", dim_all, key="story_id", cols=DIM_COLS)
 
     log("\n✓ ALL DONE.")
