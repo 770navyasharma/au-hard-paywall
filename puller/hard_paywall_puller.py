@@ -83,11 +83,13 @@ def pull_feed_metrics(date_str: str) -> pd.DataFrame:
     # NOTE: do NOT alias to `date`, `hour`, or `position` in SQL — all three
     # are Pinot/Calcite reserved words. Add/rename in pandas after the query.
     pos_list = ",".join(str(p) for p in POSITIONS)
-    # event_hour_ist is unreliable (returns timestamp-like strings).
-    # event_time_ist is 'HH:MM:SS' — take first 2 chars for a clean hour.
+    # IST hour derived from event_timestamp (LONG epoch ms UTC, always populated).
+    # + 19800000ms = +5:30 IST offset, divide by 3600000 (1h in ms) = hours since
+    # epoch in IST, MOD 24 = hour-of-day 0-23. event_hour_ist and event_time_ist
+    # columns are both unreliable (NULL/empty on most rows), hence timestamp math.
     sql = f"""
     SELECT
-      SUBSTR(event_time_ist, 1, 2) AS hour_ist,
+      MOD(CAST((event_timestamp + 19800000) / 3600000 AS LONG), 24) AS hour_ist,
       feed_version_id,
       feed_position,
       story_id,
@@ -105,7 +107,9 @@ def pull_feed_metrics(date_str: str) -> pd.DataFrame:
       AND story_id IS NOT NULL
       AND story_id != ''
       AND story_id != 'LOYALTY'
-    GROUP BY SUBSTR(event_time_ist, 1, 2), feed_version_id, feed_position, story_id
+    GROUP BY
+      MOD(CAST((event_timestamp + 19800000) / 3600000 AS LONG), 24),
+      feed_version_id, feed_position, story_id
     LIMIT 100000
     """
     df = pinot_query(sql)
@@ -140,7 +144,7 @@ def pull_paywall_events_day(date_str: str, keep_story_ids: set) -> pd.DataFrame:
     """
     sql = f"""
     SELECT
-      SUBSTR(event_time_ist, 1, 2) AS hour_ist,
+      MOD(CAST((event_timestamp + 19800000) / 3600000 AS LONG), 24) AS hour_ist,
       CASE
         WHEN story_id IS NOT NULL AND story_id != '' AND story_id != 'null'
           THEN story_id
