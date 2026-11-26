@@ -225,16 +225,17 @@
    File → Share → Publish to web → pick tab → CSV → copy URL.
    ========================================================================= */
 const CSV_URLS = {
-  feed:    'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=1037533346&single=true&output=csv',
-  paywall: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=822394355&single=true&output=csv',
-  dim:     'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=286162334&single=true&output=csv',
+  feed:            'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=1037533346&single=true&output=csv',
+  paywall_events:  'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=1970930023&single=true&output=csv',
+  dim:             'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=286162334&single=true&output=csv',
 };
 
 /* =========================================================================
    State
    ========================================================================= */
 const STATE = {
-  feed: [], paywall: [], dim: {},
+  feed: [], paywall_events: [], dim: {},
+  pwIndex: {},    // (date|hour|story_id) → {PV,PC,VIL,BC,BUYS: Sets of user_ids}
   joined: [],
   filters: {
     dateFrom:null, dateTo:null,
@@ -306,14 +307,15 @@ const DERIVED_KEYS     = METRICS.filter(m => m[3]).map(m => m[0]);
 async function loadAll(){
   const [feedCsv, pwCsv, dimCsv] = await Promise.all([
     fetchCsv(CSV_URLS.feed),
-    fetchCsv(CSV_URLS.paywall),
+    fetchCsv(CSV_URLS.paywall_events),
     fetchCsv(CSV_URLS.dim),
   ]);
-  STATE.feed    = normFeed(feedCsv);
-  STATE.paywall = normPaywall(pwCsv);
-  STATE.dim     = indexBy(normDim(dimCsv), 'story_id');
+  STATE.feed            = normFeed(feedCsv);
+  STATE.paywall_events  = normPaywallEvents(pwCsv);
+  STATE.dim             = indexBy(normDim(dimCsv), 'story_id');
+  buildPwIndex();
   const pill = document.getElementById('statusPill');
-  pill.textContent = `${STATE.feed.length} feed rows · ${STATE.paywall.length} paywall rows · ${Object.keys(STATE.dim).length} stories`;
+  pill.textContent = `${STATE.feed.length} feed rows · ${STATE.paywall_events.length} paywall events · ${Object.keys(STATE.dim).length} stories`;
 }
 
 async function fetchCsv(url){
@@ -346,16 +348,55 @@ function normFeed(rows){
     };
   }).filter(r=>r.story_id && r.story_id!=='LOYALTY' && !isNaN(parseHour(r.hour)));
 }
-function normPaywall(rows){
+function normPaywallEvents(rows){
+  // RAW events — one row per (date, hour, story, event_type, user_id).
+  // Aggregation uses Set-union on user_id to get true unique users for any
+  // filter window. Summing DISTINCTCOUNT per hour inflated DAU 3-4x vs GA.
   return rows.map(r=>{
     const hr = parseHour(r.hour);
     return {
-      date: String(r.date||'').trim(), hour: pad2(hr), story_id:(r.story_id||'').trim(),
-      pv_users:+r.pv_users || 0, pc_users:+r.pc_users || 0,
-      vil_users:+r.vil_users || 0, bc_users:+r.bc_users || 0,
-      buys_users:+r.buys_users || 0,
+      date: String(r.date||'').trim(),
+      hour: pad2(hr), hr: hr,
+      story_id: String(r.story_id||'').trim(),
+      event_type: String(r.event_type||'').trim(),
+      user_id: String(r.user_id||'').trim(),
     };
-  }).filter(r=>r.story_id && !isNaN(parseHour(r.hour)));
+  }).filter(r => r.story_id && r.user_id && r.event_type && !isNaN(r.hr));
+}
+/* Build an index: (date|hour|story_id) → {PV, PC, VIL, BC, BUYS: Sets of user_ids}
+   so aggregation at any granularity can union sets instead of summing counts. */
+const PW_EVT_SHORT = {
+  'PAYWALL_VIEW':'PV','PAYWALL_CLICK':'PC',
+  'VIEW_ITEM_LIST':'VIL','BEGIN_CHECKOUT':'BC',
+  'BUYS_PREMIUM_SUBSCRIPTION':'BUYS',
+};
+function buildPwIndex(){
+  STATE.pwIndex = {};
+  STATE.paywall_events.forEach(r => {
+    const key = `${r.date}|${r.hour}|${r.story_id}`;
+    let b = STATE.pwIndex[key];
+    if (!b){
+      b = {PV:new Set(),PC:new Set(),VIL:new Set(),BC:new Set(),BUYS:new Set()};
+      STATE.pwIndex[key] = b;
+    }
+    const s = PW_EVT_SHORT[r.event_type];
+    if (s) b[s].add(r.user_id);
+  });
+}
+/* Union user sets across a list of (date|hour|story_id) keys → true unique users */
+function unionPwCounts(keys){
+  const u = {PV:new Set(),PC:new Set(),VIL:new Set(),BC:new Set(),BUYS:new Set()};
+  keys.forEach(k => {
+    const b = STATE.pwIndex[k];
+    if (!b) return;
+    b.PV.forEach(x=>u.PV.add(x));   b.PC.forEach(x=>u.PC.add(x));
+    b.VIL.forEach(x=>u.VIL.add(x)); b.BC.forEach(x=>u.BC.add(x));
+    b.BUYS.forEach(x=>u.BUYS.add(x));
+  });
+  return {
+    pv_users: u.PV.size, pc_users: u.PC.size, vil_users: u.VIL.size,
+    bc_users: u.BC.size, buys_users: u.BUYS.size,
+  };
 }
 function normDim(rows){
   return rows.map(r=>({
@@ -373,28 +414,31 @@ function pad2(x){
 }
 
 /* =========================================================================
-   Build joined dataset — paywall funnel joined on (date, hour, story_id)
+   Build joined dataset — per-row paywall counts come from pwIndex for the exact
+   (date, hour, story_id). For aggregation across multiple rows, Set-union is
+   used (not sum) so repeated users across position/version/story count once.
    ========================================================================= */
 function buildJoined(){
-  // index paywall by (date,hour,story_id)
-  const pwIx = {};
-  STATE.paywall.forEach(r => { pwIx[`${r.date}|${r.hour}|${r.story_id}`] = r; });
-  const def = {pv_users:0,pc_users:0,vil_users:0,bc_users:0,buys_users:0};
-
   STATE.joined = STATE.feed.map(f => {
-    const pw = pwIx[`${f.date}|${f.hour}|${f.story_id}`] || def;
-    const d  = STATE.dim[f.story_id] || {};
-    const feed_ctr    = f.fi_users ? f.fc_users / f.fi_users : 0;
-    const paywall_ctr = pw.pv_users ? pw.pc_users / pw.pv_users : 0;
-    const pv_to_vil   = pw.pv_users ? pw.vil_users / pw.pv_users : 0;
-    const vil_to_bc   = pw.vil_users ? pw.bc_users / pw.vil_users : 0;
-    const pv_to_buys  = pw.pv_users ? pw.buys_users / pw.pv_users : 0;
+    const key = `${f.date}|${f.hour}|${f.story_id}`;
+    const pw  = STATE.pwIndex[key];
+    const pv  = pw ? pw.PV.size  : 0;
+    const pc  = pw ? pw.PC.size  : 0;
+    const vil = pw ? pw.VIL.size : 0;
+    const bc  = pw ? pw.BC.size  : 0;
+    const buys= pw ? pw.BUYS.size: 0;
+    const d   = STATE.dim[f.story_id] || {};
     return {
-      ...f, ...pw,
+      ...f,
+      pv_users:pv, pc_users:pc, vil_users:vil, bc_users:bc, buys_users:buys,
       title_hn:d.title_hn||'', title_en:d.title_en||'',
       author:d.author||'', category_hn:d.category_hn||'',
       url:d.url||'', is_premium:d.is_premium||'',
-      feed_ctr, paywall_ctr, pv_to_vil, vil_to_bc, pv_to_buys
+      feed_ctr:   f.fi_users ? f.fc_users/f.fi_users : 0,
+      paywall_ctr: pv ? pc/pv : 0,
+      pv_to_vil:  pv ? vil/pv : 0,
+      vil_to_bc:  vil ? bc/vil : 0,
+      pv_to_buys: pv ? buys/pv : 0,
     };
   });
 }
@@ -586,9 +630,9 @@ function cmp(col, dir){
 }
 
 /* Aggregate filtered rows by selected dimensions.
-   Paywall funnel is deduped on (date, hour, story_id) to prevent double
-   counting when position/version dims are selected (paywall data is identical
-   across position/version rows for the same (date, hour, story_id)). */
+   Feed metrics (fi, fc): summed across rows in each group.
+   Paywall funnel: Set-union of user_ids across the (date, hour, story_id) tuples
+   in each group — gives TRUE unique users, not the sum of DISTINCTCOUNTs. */
 function aggregate(rows, selectedDimKeys){
   const agg = {};
   rows.forEach(r => {
@@ -596,31 +640,24 @@ function aggregate(rows, selectedDimKeys){
       ? selectedDimKeys.map(d => r[d] == null ? '' : r[d]).join('\u0001')
       : '__total__';
     if (!agg[key]){
-      const bucket = {_dims:{}, _pwSeen:new Set(),
-        fi_users:0, fc_users:0, fi_events:0, fc_events:0,
-        pv_users:0, pc_users:0, vil_users:0, bc_users:0, buys_users:0};
-      selectedDimKeys.forEach(d => bucket._dims[d] = r[d]);
-      agg[key] = bucket;
+      agg[key] = {_dims:{},
+        _pwKeys: new Set(),           // (date|hour|story_id) tuples in this group
+        fi_users:0, fc_users:0, fi_events:0, fc_events:0};
+      selectedDimKeys.forEach(d => agg[key]._dims[d] = r[d]);
     }
     const b = agg[key];
     b.fi_users += r.fi_users||0; b.fc_users += r.fc_users||0;
     b.fi_events += r.fi_events||0; b.fc_events += r.fc_events||0;
-    const pwKey = `${r.date}\u0001${r.hour}\u0001${r.story_id}`;
-    if (!b._pwSeen.has(pwKey)){
-      b._pwSeen.add(pwKey);
-      b.pv_users += r.pv_users||0; b.pc_users += r.pc_users||0;
-      b.vil_users += r.vil_users||0; b.bc_users += r.bc_users||0;
-      b.buys_users += r.buys_users||0;
-    }
+    b._pwKeys.add(`${r.date}|${r.hour}|${r.story_id}`);
   });
-  // compute derived (%) metrics after aggregation
   return Object.values(agg).map(b => {
+    const pw = unionPwCounts(b._pwKeys);
+    Object.assign(b, pw);
     DERIVED_KEYS.forEach(k => {
       const d = METRICS.find(m => m[0]===k)[3];
       b[k] = b[d.den] ? b[d.num]/b[d.den] : 0;
     });
-    delete b._pwSeen;
-    // flatten dim values to top-level for sort/search convenience
+    delete b._pwKeys;
     Object.entries(b._dims).forEach(([k,v]) => b[k] = v);
     return b;
   });
@@ -629,15 +666,10 @@ function aggregate(rows, selectedDimKeys){
 function renderKpis(rows){
   const sum = k => rows.reduce((a,r)=>a+(r[k]||0), 0);
   const fi = sum('fi_users'), fc = sum('fc_users');
-  // paywall funnel: dedupe by (date,hour,story) to avoid position-duplication
-  const seen = new Set();
-  let pv=0,pc=0,vil=0,bc=0,buys=0;
-  rows.forEach(r=>{
-    const k = `${r.date}|${r.hour}|${r.story_id}`;
-    if (seen.has(k)) return;
-    seen.add(k);
-    pv+=r.pv_users; pc+=r.pc_users; vil+=r.vil_users; bc+=r.bc_users; buys+=r.buys_users;
-  });
+  // Paywall: union user sets across the (date, hour, story_id) tuples in filter
+  const keys = new Set();
+  rows.forEach(r => keys.add(`${r.date}|${r.hour}|${r.story_id}`));
+  const {pv_users:pv, pc_users:pc, vil_users:vil, bc_users:bc, buys_users:buys} = unionPwCounts(keys);
   const html = [
     kpi('Feed impressions', fmt(fi)),
     kpi('Feed clicks',      fmt(fc)),
@@ -659,12 +691,9 @@ let _chart = null;
 function renderChart(rows){
   const sum = k => rows.reduce((a,r)=>a+(r[k]||0), 0);
   const fi=sum('fi_users'), fc=sum('fc_users');
-  const seen=new Set(); let pv=0,pc=0,vil=0,bc=0,buys=0;
-  rows.forEach(r=>{
-    const k = `${r.date}|${r.hour}|${r.story_id}`;
-    if (seen.has(k)) return; seen.add(k);
-    pv+=r.pv_users; pc+=r.pc_users; vil+=r.vil_users; bc+=r.bc_users; buys+=r.buys_users;
-  });
+  const keys = new Set();
+  rows.forEach(r => keys.add(`${r.date}|${r.hour}|${r.story_id}`));
+  const {pv_users:pv, pc_users:pc, vil_users:vil, bc_users:bc, buys_users:buys} = unionPwCounts(keys);
   const vals = [fi, fc, pv, pc, vil, bc, buys];
   const labels = ['Feed imp.', 'Feed click', 'Paywall view', 'Paywall click', 'Plan page', 'Begin checkout', 'Buys'];
   const ctx = document.getElementById('funnelChart').getContext('2d');

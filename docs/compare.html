@@ -39,15 +39,14 @@
   .addbtn{background:var(--teal);border:0;color:#04231d;font-weight:600;font-size:13px;padding:10px 18px;border-radius:7px;cursor:pointer;font-family:var(--sans);white-space:nowrap}
   .addbtn:hover{filter:brightness(1.07)}
 
-  .baseline-toggle{display:flex;align-items:center;gap:8px;margin-top:14px;font-family:var(--mono);font-size:11px;color:var(--steel);letter-spacing:.05em}
-  .baseline-toggle input{width:16px;height:16px;accent-color:var(--teal);cursor:pointer}
+
 
   /* window chips */
   .windows{display:flex;flex-wrap:wrap;gap:8px;margin-bottom:22px}
   .chip{display:flex;align-items:center;gap:8px;background:var(--panel);border:1px solid var(--amber-dim);
     border-radius:20px;padding:6px 10px 6px 14px;font-family:var(--mono);font-size:12px}
   .chip .dot{width:8px;height:8px;border-radius:50%;background:var(--amber);flex-shrink:0}
-  .chip.baseline{border-color:var(--line-2)} .chip.baseline .dot{background:var(--steel)}
+
   .chip .lbl{color:var(--paper)}
   .chip .x{cursor:pointer;color:var(--steel-dim);font-size:16px;line-height:1;margin-left:4px;padding:0 4px;border-radius:3px}
   .chip .x:hover{color:var(--danger);background:var(--line)}
@@ -165,9 +164,9 @@
    CONFIG — SAME 3 CSV URLs as index.html
    ========================================================================= */
 const CSV_URLS = {
-  feed:    'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=1037533346&single=true&output=csv',
-  paywall: 'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=822394355&single=true&output=csv',
-  dim:     'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=286162334&single=true&output=csv',
+  feed:            'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=1037533346&single=true&output=csv',
+  paywall_events:  'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=1970930023&single=true&output=csv',
+  dim:             'https://docs.google.com/spreadsheets/d/e/2PACX-1vQ4bglfC-McvcqIyL_eggxJnxPNBPtXWOuNgBGTbms76zpnP0HP-5uxUeR2SgOI6DFNKhtYkNkhhzZ_/pub?gid=286162334&single=true&output=csv',
 };
 
 const METRICS = [
@@ -191,15 +190,20 @@ const CHART_METRICS = ['feed_ctr','paywall_ctr','pv_to_vil','vil_to_bc','pv_to_b
 
 // Color palette for windows (cycled)
 const WIN_COLORS = ['#f4b942','#3fb9a3','#a78bfa','#f472b6','#60a5fa','#fb923c'];
-const BASE_COLOR = '#8a94a6';
 
 /* =========================================================================
    State
    ========================================================================= */
 const STATE = {
-  feed: [], paywall: [], dim: {},
-  joined: [],         // one row per (date, hour, position, version, story_id) with all metrics
+  feed: [], paywall_events: [], dim: {},
+  pwIndex: {},        // (date|hour|story_id) → {PV,PC,VIL,BC,BUYS: Sets}
+  joined: [],         // one row per feed grain (date, hour, position, version, story_id)
   windows: [],        // array of {id, date, from, to, label}
+};
+const PW_EVT_SHORT = {
+  'PAYWALL_VIEW':'PV','PAYWALL_CLICK':'PC',
+  'VIEW_ITEM_LIST':'VIL','BEGIN_CHECKOUT':'BC',
+  'BUYS_PREMIUM_SUBSCRIPTION':'BUYS',
 };
 
 /* =========================================================================
@@ -220,13 +224,14 @@ const STATE = {
 
 async function loadAll(){
   const [feedCsv, pwCsv, dimCsv] = await Promise.all([
-    fetchCsv(CSV_URLS.feed), fetchCsv(CSV_URLS.paywall), fetchCsv(CSV_URLS.dim)
+    fetchCsv(CSV_URLS.feed), fetchCsv(CSV_URLS.paywall_events), fetchCsv(CSV_URLS.dim)
   ]);
-  STATE.feed    = normFeed(feedCsv);
-  STATE.paywall = normPaywall(pwCsv);
-  STATE.dim     = indexBy(normDim(dimCsv), 'story_id');
+  STATE.feed           = normFeed(feedCsv);
+  STATE.paywall_events = normPaywallEvents(pwCsv);
+  STATE.dim            = indexBy(normDim(dimCsv), 'story_id');
+  buildPwIndex();
   document.getElementById('dataPill').textContent =
-    `${STATE.feed.length} feed · ${STATE.paywall.length} paywall · ${Object.keys(STATE.dim).length} stories`;
+    `${STATE.feed.length} feed · ${STATE.paywall_events.length} paywall events · ${Object.keys(STATE.dim).length} stories`;
 }
 
 async function fetchCsv(url){
@@ -255,16 +260,44 @@ function normFeed(rows){
     };
   }).filter(r=>r.story_id && r.story_id!=='LOYALTY' && !isNaN(r.hr));
 }
-function normPaywall(rows){
+function normPaywallEvents(rows){
   return rows.map(r=>{
     const hr = parseHour(r.hour);
     return {
       date: String(r.date||'').trim(),
-      hour: pad2(hr), hr: hr, story_id:(r.story_id||'').trim(),
-      pv_users:+r.pv_users||0, pc_users:+r.pc_users||0,
-      vil_users:+r.vil_users||0, bc_users:+r.bc_users||0, buys_users:+r.buys_users||0,
+      hour: pad2(hr), hr: hr,
+      story_id: String(r.story_id||'').trim(),
+      event_type: String(r.event_type||'').trim(),
+      user_id: String(r.user_id||'').trim(),
     };
-  }).filter(r=>r.story_id && !isNaN(r.hr));
+  }).filter(r => r.story_id && r.user_id && r.event_type && !isNaN(r.hr));
+}
+function buildPwIndex(){
+  STATE.pwIndex = {};
+  STATE.paywall_events.forEach(r => {
+    const key = `${r.date}|${r.hour}|${r.story_id}`;
+    let b = STATE.pwIndex[key];
+    if (!b){
+      b = {PV:new Set(),PC:new Set(),VIL:new Set(),BC:new Set(),BUYS:new Set()};
+      STATE.pwIndex[key] = b;
+    }
+    const s = PW_EVT_SHORT[r.event_type];
+    if (s) b[s].add(r.user_id);
+  });
+}
+function unionPwCounts(keys){
+  const u = {PV:new Set(),PC:new Set(),VIL:new Set(),BC:new Set(),BUYS:new Set()};
+  keys.forEach(k => {
+    const b = STATE.pwIndex[k];
+    if (!b) return;
+    b.PV.forEach(x=>u.PV.add(x));   b.PC.forEach(x=>u.PC.add(x));
+    b.VIL.forEach(x=>u.VIL.add(x)); b.BC.forEach(x=>u.BC.add(x));
+    b.BUYS.forEach(x=>u.BUYS.add(x));
+  });
+  return {
+    pv_users:u.PV.size, pc_users:u.PC.size, vil_users:u.VIL.size,
+    bc_users:u.BC.size, buys_users:u.BUYS.size
+  };
 }
 function normDim(rows){
   return rows.map(r=>({
@@ -283,12 +316,9 @@ function pad2(x){
    Build joined — same logic as main dashboard
    ========================================================================= */
 function buildJoined(){
-  const pwIx = {};
-  STATE.paywall.forEach(r => { pwIx[`${r.date}|${r.hour}|${r.story_id}`] = r; });
-  const def = {pv_users:0,pc_users:0,vil_users:0,bc_users:0,buys_users:0};
-  STATE.joined = STATE.feed.map(f => ({
-    ...f, ...(pwIx[`${f.date}|${f.hour}|${f.story_id}`] || def),
-  }));
+  // Feed-only joined; paywall is computed on-demand from pwIndex via Set union
+  // on user_ids for the (date, hour, story_id) tuples in the filter window.
+  STATE.joined = STATE.feed.slice();
 }
 
 /* =========================================================================
@@ -340,24 +370,31 @@ function winLabel(w){
 
 
 /* =========================================================================
-   Aggregation per window — with paywall dedupe on (date,hour,story_id)
+   Aggregation per window — feed metrics summed, paywall metrics via Set union
+   on raw user_ids (true unique users across any time range).
    ========================================================================= */
 function aggregateWindow(filter){
   const agg = {fi_users:0,fc_users:0,fi_events:0,fc_events:0,
-               pv_users:0,pc_users:0,vil_users:0,bc_users:0,buys_users:0};
-  const seen = new Set();
+               _rowCount:0, _storyCount:0};
+  const stories = new Set();
+  const pwKeys  = new Set();
   STATE.joined.forEach(r => {
     if (!filter(r)) return;
+    agg._rowCount++;
+    stories.add(r.story_id);
+    pwKeys.add(`${r.date}|${r.hour}|${r.story_id}`);
     agg.fi_users += r.fi_users; agg.fc_users += r.fc_users;
     agg.fi_events += r.fi_events; agg.fc_events += r.fc_events;
-    const pwKey = `${r.date}|${r.hour}|${r.story_id}`;
-    if (!seen.has(pwKey)){
-      seen.add(pwKey);
-      agg.pv_users += r.pv_users; agg.pc_users += r.pc_users;
-      agg.vil_users += r.vil_users; agg.bc_users += r.bc_users;
-      agg.buys_users += r.buys_users;
-    }
   });
+  // Paywall — pull users from pwIndex for ANY (date, hour, story) in-window,
+  // even if that tuple had no feed row (story was shown but we didn't record a
+  // feed_impression at exactly that hour). This keeps the paywall tally honest.
+  STATE.paywall_events.forEach(r => {
+    if (filter(r)) pwKeys.add(`${r.date}|${r.hour}|${r.story_id}`);
+  });
+  const pw = unionPwCounts(pwKeys);
+  Object.assign(agg, pw);
+  agg._storyCount = stories.size;
   // derived
   agg.feed_ctr    = agg.fi_users ? agg.fc_users/agg.fi_users : 0;
   agg.paywall_ctr = agg.pv_users ? agg.pc_users/agg.pv_users : 0;
@@ -400,13 +437,20 @@ function renderAll(){
 function renderChips(){
   const el = document.getElementById('winList');
   if (!STATE.windows.length){ el.innerHTML = ''; return; }
-  el.innerHTML = STATE.windows.map((w, i) => `
-    <div class="chip" style="border-color:${WIN_COLORS[i % WIN_COLORS.length]}">
+  el.innerHTML = STATE.windows.map((w, i) => {
+    const agg = aggregateWindow(windowFilter(w));
+    const empty = agg._rowCount === 0;
+    const count = empty
+      ? `<span style="color:var(--danger);font-size:11px">⚠ 0 rows</span>`
+      : `<span style="color:var(--steel-dim);font-size:11px">${agg._rowCount} rows · ${agg._storyCount} ${agg._storyCount===1?'story':'stories'}</span>`;
+    return `
+    <div class="chip" style="border-color:${empty?'var(--danger)':WIN_COLORS[i % WIN_COLORS.length]}">
       <span class="dot" style="background:${WIN_COLORS[i % WIN_COLORS.length]}"></span>
       <span class="lbl">${escapeHtml(winLabel(w))}</span>
+      ${count}
       <span class="x" data-rm="${w.id}" title="remove">×</span>
-    </div>
-  `).join('');
+    </div>`;
+  }).join('');
   el.querySelectorAll('[data-rm]').forEach(x =>
     x.addEventListener('click', ()=>removeWindow(x.dataset.rm))
   );
